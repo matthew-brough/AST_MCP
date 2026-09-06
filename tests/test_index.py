@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from ast_mcp import parser
-from ast_mcp.index import DB_DIRNAME, SCHEMA_VERSION, Index
+from ast_mcp.index import DB_DIRNAME, SCHEMA_VERSION, Index, query_fingerprint
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -195,6 +195,28 @@ class TestSchemaVersioning(IndexTestBase):
         self.assertEqual(self.count(rebuilt, "symbols"), 0)
         self.assertEqual(
             rebuilt.conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION
+        )
+
+    def test_edited_query_files_rebuild_the_index(self):
+        """A cached symbol set outlives its rules unless the queries are versioned."""
+        index = self.build(copy_fixtures=False)
+        (self.root / "a.py").write_text("def f():\n    pass\n")
+        index.refresh_all()
+        self.assertEqual(self.count(index, "symbols"), 1)
+        db_path = index.db_path
+        index.close()
+
+        connection = sqlite3.connect(db_path)
+        connection.execute("PRAGMA application_id = 1234")
+        connection.commit()
+        connection.close()
+
+        rebuilt = Index(self.root)
+        self.addCleanup(rebuilt.close)
+        self.assertEqual(self.count(rebuilt, "symbols"), 0)
+        self.assertEqual(
+            rebuilt.conn.execute("PRAGMA application_id").fetchone()[0],
+            query_fingerprint(),
         )
 
 

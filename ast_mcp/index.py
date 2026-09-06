@@ -11,6 +11,7 @@ SPEC §V.10 — the walk never shells to ``git``.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import sqlite3
 import time
@@ -27,6 +28,26 @@ from ast_mcp.parser import ParsedFile, parse_file, size_limit, stat_key
 SCHEMA_VERSION = 1
 DB_DIRNAME = ".ast_mcp"
 DB_FILENAME = "index.db"
+
+_QUERY_FINGERPRINT: int | None = None
+
+
+def query_fingerprint() -> int:
+    """Hash of every ``.scm``, stored alongside the schema version.
+
+    The index caches extraction, and extraction is defined by the query files.
+    Without this, editing a query serves symbols from the old rules until the
+    source file happens to change — the one way this cache could lie that
+    ``stat`` cannot catch (SPEC §V.3). A mismatch rebuilds, like §I.db.
+    """
+    global _QUERY_FINGERPRINT
+    if _QUERY_FINGERPRINT is None:
+        digest = hashlib.sha256()
+        for path in sorted((Path(__file__).parent / "queries").rglob("*.scm")):
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+        _QUERY_FINGERPRINT = int.from_bytes(digest.digest()[:4], "big") & 0x7FFFFFFF
+    return _QUERY_FINGERPRINT
 
 #: Never descended into. `.gitignore` patterns are honoured on top of this.
 IGNORE_DIRS = frozenset({
@@ -143,16 +164,18 @@ class Index:
 
     def _ensure_schema(self) -> None:
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        queries = self.conn.execute("PRAGMA application_id").fetchone()[0]
         has_tables = self.conn.execute(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='files'"
         ).fetchone()[0]
-        if has_tables and version == SCHEMA_VERSION:
+        if has_tables and version == SCHEMA_VERSION and queries == query_fingerprint():
             return
         # SPEC §I.db — a version mismatch drops and rebuilds; v1 does not migrate.
         for table in ("doc_nodes", "schema_nodes", "imports", "symbols", "files"):
             self.conn.execute(f"DROP TABLE IF EXISTS {table}")
         self.conn.executescript(SCHEMA)
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        self.conn.execute(f"PRAGMA application_id = {query_fingerprint()}")
         self.conn.commit()
 
     def close(self) -> None:
