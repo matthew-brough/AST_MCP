@@ -53,7 +53,7 @@ class TestArgvRouting(unittest.TestCase):
 
     def test_every_subcommand_parses(self):
         cli = build_parser()
-        for name in ("serve", "init", "index", "status", "languages"):
+        for name in ("serve", "init", "index", "status", "savings", "languages"):
             self.assertTrue(callable(cli.parse_args([name]).func), name)
 
     def test_version_flag_prints_package_version(self):

@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import os
 import sys
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
+from typing import Callable, TypeVar, cast
 
 from mcp.server import MCPServer
 
-from ast_mcp import __version__, tools
+from ast_mcp import __version__, savings, tools
 from ast_mcp.index import Index
 from ast_mcp.render import DEFAULT_MAX_TOKENS
 
@@ -68,7 +69,28 @@ def get_index(root: str | None = None) -> Index:
     return Index(Path(resolved))
 
 
+F = TypeVar("F", bound=Callable[..., dict])
+
+
+def measured(func: F) -> F:
+    """Log what the call served against what reading those files would cost.
+
+    Wrapped inside `mcp.tool()` so the ledger sees the payload the agent gets.
+    `savings.record` swallows its own failures — measurement never costs the
+    caller an answer (SPEC §V.5).
+    """
+
+    @wraps(func)
+    def wrapper(*args, **kwargs) -> dict:
+        payload = func(*args, **kwargs)
+        savings.record(get_index(), func.__name__, payload)
+        return payload
+
+    return cast(F, wrapper)
+
+
 @mcp.tool()
+@measured
 def file_outline(
     path: str,
     max_depth: int | None = None,
@@ -85,6 +107,7 @@ def file_outline(
 
 
 @mcp.tool()
+@measured
 def get_symbol(
     name: str,
     path: str | None = None,
@@ -104,6 +127,7 @@ def get_symbol(
 
 
 @mcp.tool()
+@measured
 def search_symbols(
     query: str,
     kind: str | None = None,
@@ -123,6 +147,7 @@ def search_symbols(
 
 
 @mcp.tool()
+@measured
 def get_docstrings(
     path: str | None = None,
     symbols: list[str] | None = None,
@@ -133,12 +158,14 @@ def get_docstrings(
 
 
 @mcp.tool()
+@measured
 def list_imports(path: str, max_tokens: int = DEFAULT_MAX_TOKENS) -> dict:
     """Dependency edges out of one file, plus exports where the language has them."""
     return tools.list_imports(get_index(), path, max_tokens)
 
 
 @mcp.tool()
+@measured
 def ast_query(
     path: str,
     query: str,

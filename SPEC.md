@@ -104,7 +104,9 @@ call. Mismatch → reparse + upsert before answering. Index is a cache, never
 an oracle.
 
 **V4 read-only** — the *server* process opens no user file in a write mode.
-Only writable path is `<root>/.ast_mcp/index.db` (+ SQLite sidecars). One
+Only writable paths are `<root>/.ast_mcp/index.db` and
+`<root>/.ast_mcp/savings.db` (+ SQLite sidecars) — one cache, one ledger,
+both inside the ignored index dir and neither a source file. One
 scoped exception, outside the server: the CLI's `init` (§I.cli) writes
 `<root>/.mcp.json` and `<root>/.gitignore` — config, never source, never
 during `serve`. No other subcommand writes anything but the index.
@@ -678,6 +680,17 @@ opt-in that lived only on the `init` command line would be gone by the first
 session. Default is off; `init` prints a hint when it sees a `context-engine`
 key in `.mcp.json` and changes nothing else.
 
+Savings ledger: every tool response is recorded to `<root>/.ast_mcp/savings.db`
+— tool name, the payload's estimated tokens, and the whole-file cost of every
+path the payload cites, at `render.CHARS_PER_TOKEN`. It is its own database,
+not a table in the index: the index drops and rebuilds on a schema or query
+fingerprint change and `index --rebuild` deletes the file, so history kept
+there would not survive a grammar edit. `AST_MCP_NO_STATS` (anything but empty
+/ `0` / `false` / `no`) turns recording off; `AST_MCP_PRICE_PER_MTOK` prices
+the report for a model other than Opus. Recording never raises into a tool
+call (§V.5) — a locked or unwritable ledger costs a measurement, never an
+answer.
+
 Entry: `mcp.run(transport="stdio")`.
 
 Packaging: hatchling, `requires-python >= 3.11`, version read from
@@ -689,7 +702,7 @@ cleanly and extracts nothing. CI asserts the count.
 
 ### I.cli — `ast-mcp` command surface
 
-Five subcommands. Bare `ast-mcp`, or `ast-mcp` followed only by flags, means
+Six subcommands. Bare `ast-mcp`, or `ast-mcp` followed only by flags, means
 `serve` — the pre-CLI invocation stays valid.
 
 | command | writes | does |
@@ -698,6 +711,7 @@ Five subcommands. Bare `ast-mcp`, or `ast-mcp` followed only by flags, means
 | `init [--root] [--command CMD] [--with-cce] [--no-index] [--dry-run]` | `.mcp.json`, `.gitignore`, index | register + ignore + build |
 | `index [--root] [--rebuild] [--verbose] [--quiet]` | index only | `refresh_all`, then counts + skips |
 | `status [--root] [--json]` | nothing | counts, size, age, registration |
+| `savings [--root] [--json] [--reset]` | ledger on `--reset` only | tokens served vs. whole-file reads |
 | `languages [--group G] [--json]` | nothing | the §I.langs registry |
 
 `init` is a **merge, not a template**. It rewrites exactly one key —
@@ -714,7 +728,8 @@ cache root, or an `archive-v*` / `environments-v*` component — and the
 fallback is `uvx`.
 
 `status` on an unindexed root reports that and creates no database. Reading
-status must not be the thing that writes one.
+status must not be the thing that writes one. `savings` follows the same rule:
+an unrecorded root reports zero and leaves the ledger absent.
 
 `--with-cce` is the only knob that changes what the agent is told, and it is
 off unless typed. Detecting a sibling retriever and silently rewriting the
@@ -729,7 +744,7 @@ sibling `.mcp.json` key, which `init` refuses to do.
 ast_mcp/
   __init__.py
   __main__.py        `python -m ast_mcp` -> cli.main
-  cli.py             argv routing, init/index/status/languages, serve
+  cli.py             argv routing, init/index/status/savings/languages, serve
   main.py            entry, MCPServer wiring, run(transport="stdio")
   languages.py       LangSpec registry (26 rows), load_language + fallback
   parser.py          bytes -> Tree, LRU cache keyed (path, mtime_ns, size)
@@ -739,6 +754,7 @@ ast_mcp/
   index.py           SQLite schema, upsert, staleness, walk
   tools.py           6 tool impls, profile dispatch
   render.py          output shaping, max_tokens trimming
+  savings.py         per-call token ledger, baseline vs served, report
   queries/
     core/     python.scm javascript.scm typescript.scm tsx.scm go.scm lua.scm
     defs/     ruby.scm perl.scm r.scm bash.scm zsh.scm
@@ -755,6 +771,7 @@ tests/
     docs/       sample.md
   test_languages.py test_extract.py test_extract_schema.py
   test_extract_doc.py test_index.py test_tools.py test_cli.py
+  test_savings.py
 ```
 
 `schema` and `outline` profiles have **no `.scm` files** — they walk the tree
@@ -791,6 +808,7 @@ stray `import httpx2` deleted.
 | T17 | x | packaging — hatchling, console script `ast-mcp`, py3.11 floor, wheel carries every `.scm`, LICENSE | `uv build` then handshake the wheel: `tools/list` returns 6, `file_outline` extracts |
 | T18 | x | CI + release workflows — test matrix 3.11–3.14, wheel query-file gate, tag/version check, PyPI trusted publishing | workflows present; release job refuses a tag that disagrees with `__version__` |
 | T19 | x | standalone-by-default instructions + `--with-cce` opt-in on `serve`/`init`, `init` hint on a registered `context-engine` key | `test_server.py`: default instructions name no other tool, flag appends the paragraph; `test_cli.py`: flag lands in the stanza, detection hints without enabling |
+| T20 | x | `savings.py` + `ast-mcp savings` — per-call ledger in its own db, baseline = whole-file read of every cited path, report + `--json` + `--reset`, `AST_MCP_NO_STATS` opt-out | `test_savings.py`: a server tool call lands in the ledger, saved = baseline - served, unrecorded root creates no db, a broken ledger never raises |
 
 ### T1 gate script
 

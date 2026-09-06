@@ -1,6 +1,6 @@
 """Command line surface — `ast-mcp`.
 
-Five subcommands (SPEC §I.cli). Four are read-only; `init` is the single
+Six subcommands (SPEC §I.cli). Five are read-only; `init` is the single
 exception to §V.4 and touches exactly two files, both outside the source tree
 it indexes: `<root>/.mcp.json` and `<root>/.gitignore`.
 
@@ -20,14 +20,14 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from ast_mcp import __version__
+from ast_mcp import __version__, savings
 from ast_mcp.index import DB_DIRNAME, DB_FILENAME, Index
 from ast_mcp.languages import GROUPS, LANGS
 
 #: Key this tool owns inside `.mcp.json`. `init` rewrites this key and no other.
 MCP_SERVER_KEY = "ast-mcp"
 
-SUBCOMMANDS = ("serve", "init", "index", "status", "languages")
+SUBCOMMANDS = ("serve", "init", "index", "status", "savings", "languages")
 
 #: The MCP key CCE registers itself under. Read for the `--with-cce` hint and
 #: nothing else — this tool never writes it and does not require it to exist.
@@ -384,6 +384,80 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+
+# --- savings -----------------------------------------------------------------
+
+
+def _human_tokens(tokens: int) -> str:
+    if tokens < 1000:
+        return str(tokens)
+    if tokens < 1_000_000:
+        return f"{tokens / 1000:.1f}k"
+    return f"{tokens / 1_000_000:.2f}M"
+
+
+def _human_dollars(amount: float) -> str:
+    return f"${amount:.2f}" if amount >= 0.01 else "<$0.01"
+
+
+def _bar(fraction: float, width: int = 10) -> str:
+    filled = min(width, max(0, round(fraction * width)))
+    return "▰" * filled + "▱" * (width - filled)
+
+
+def cmd_savings(args: argparse.Namespace) -> int:
+    root = resolve_root(args.root)
+    if args.reset:
+        discarded = savings.reset(root)
+        print(f"cleared {discarded} recorded {'query' if discarded == 1 else 'queries'}")
+        return 0
+
+    report = savings.report(root)
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2))
+        return 0
+
+    if report.calls == 0:
+        print(f"root {root}")
+        print("  no queries recorded yet — savings accrue as the agent uses the tools")
+        if not savings.enabled():
+            print("  recording is off (AST_MCP_NO_STATS)")
+        return 0
+
+    age = _human_age(max(0, int(time.time()) - int(report.last_ts or 0)))
+    plural = "query" if report.calls == 1 else "queries"
+    print(f"root {root} · {report.calls} {plural} · last query {age} ago")
+    print()
+    print(f"  {_bar(report.saved / report.baseline if report.baseline else 0)}"
+          f"  {report.percent}% of a whole-file read saved")
+    print()
+    print(f"  whole-file reads  {_human_tokens(report.baseline):>8} tokens")
+    print(f"  served by ast-mcp {_human_tokens(report.served):>8} tokens")
+    print("  " + "─" * 38)
+    print(f"  saved             {_human_tokens(report.saved):>8} tokens"
+          f"   {_human_dollars(report.saved_dollars)}")
+    print(f"  ~{_human_tokens(report.saved // report.calls)} tokens / query"
+          f"  ~{_human_dollars(report.saved_dollars / report.calls)} / query")
+
+    if report.tools:
+        print()
+        print("  by tool:")
+        width = max(len(row.tool) for row in report.tools)
+        for row in report.tools:
+            share = row.saved / report.saved if report.saved else 0
+            calls = f"{row.calls} call" + ("" if row.calls == 1 else "s")
+            print(f"    {row.tool.ljust(width)}  {round(share * 100):>3}%  {_bar(share)}"
+                  f"  {_human_tokens(row.saved):>7}  {_human_dollars(savings.dollars(row.saved)):>6}"
+                  f" · {calls}")
+
+    print()
+    print("  baseline is a whole-file read of every file a response drew from,"
+          " at ~4 chars/token.")
+    print(f"  priced at ${savings.price_per_mtok():.1f}/1M input tokens"
+          " (AST_MCP_PRICE_PER_MTOK overrides).")
+    return 0
+
+
 # --- languages ---------------------------------------------------------------
 
 
@@ -463,6 +537,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root(status)
     status.add_argument("--json", action="store_true", help="machine-readable output")
     status.set_defaults(func=cmd_status)
+
+    savings_parser = subparsers.add_parser(
+        "savings", help="token savings against whole-file reads"
+    )
+    _add_root(savings_parser)
+    savings_parser.add_argument("--json", action="store_true", help="machine-readable output")
+    savings_parser.add_argument(
+        "--reset", action="store_true", help="discard the recorded history"
+    )
+    savings_parser.set_defaults(func=cmd_savings)
 
     languages = subparsers.add_parser("languages", help="the language registry")
     languages.add_argument("--group", choices=GROUPS, default=None)

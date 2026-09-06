@@ -58,6 +58,7 @@ instead. Override either with `--command "uv run ast-mcp serve"`.
 | `ast-mcp init` | register in `.mcp.json`, ignore the index dir, build the index |
 | `ast-mcp index [--rebuild]` | build or refresh the index; `--rebuild` discards it first |
 | `ast-mcp status [--json]` | file/symbol counts, index size, freshness, registration |
+| `ast-mcp savings [--json] [--reset]` | tokens served vs. what reading those files whole would have cost |
 | `ast-mcp languages [--group G]` | the language registry — 26 rows, their extensions and profiles |
 | `ast-mcp serve` | the MCP server over stdio; what Claude Code launches |
 
@@ -152,6 +153,32 @@ pays, and `get_symbol` on a single definition pays regardless.
 
 A 5000-row CSV or JSON array costs the same as a 3-row one: homogeneous
 repeats collapse to one node carrying `children_count`.
+
+### Measure it on your own repo
+
+Every tool response is logged to `.ast_mcp/savings.db` — what it served, and
+what a whole-file read of every file it cited would have cost.
+
+```console
+$ ast-mcp savings
+root /home/you/project · 5 queries · last query 2m ago
+
+  ▰▰▰▰▰▰▰▰▰▱  90% of a whole-file read saved
+
+  whole-file reads     38.5k tokens
+  served by ast-mcp     3.9k tokens
+  ──────────────────────────────────────
+  saved                34.6k tokens   $0.52
+  ~6.9k tokens / query  ~$0.10 / query
+
+  by tool:
+    search_symbols   62%  ▰▰▰▰▰▰▱▱▱▱    21.5k   $0.32 · 1 call
+    file_outline     21%  ▰▰▱▱▱▱▱▱▱▱     7.3k   $0.11 · 2 calls
+```
+
+`--json` for the same numbers machine-readably, `--reset` to start the count
+over. Pricing is Opus input ($15/1M); set `AST_MCP_PRICE_PER_MTOK` for another
+model, or `AST_MCP_NO_STATS=1` to record nothing at all.
 
 ## Freshness
 
