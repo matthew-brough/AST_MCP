@@ -10,7 +10,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from ast_mcp import __version__, parser
+from ast_mcp import __version__, claudemd, parser
 from ast_mcp.cli import MCP_SERVER_KEY, build_parser, main, normalise, server_invocation
 from ast_mcp.index import DB_DIRNAME, DB_FILENAME
 
@@ -343,3 +343,99 @@ class TestServe(CLITestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CCE_BLOCK = """<!-- cce-block-version: 4 -->
+## Context Engine (CCE)
+
+**You MUST use `context_search` instead of reading files directly.**
+<!-- /cce-block -->
+"""
+
+
+class TestClaudeMd(CLITestBase):
+    """SPEC §I.claudemd — one routing block, written only when asked."""
+
+    def claude_md(self) -> str:
+        return (self.root / "CLAUDE.md").read_text(encoding="utf-8")
+
+    def test_written_by_default(self):
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        self.assertIn(claudemd.AST_MARKER, self.claude_md())
+
+    def test_no_claude_md_leaves_the_file_alone(self):
+        self.run_cli("init", "--root", str(self.root), "--no-index", "--no-claude-md")
+        self.assertFalse((self.root / "CLAUDE.md").exists())
+
+    def test_creates_the_file_when_absent(self):
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        text = self.claude_md()
+        self.assertIn(claudemd.AST_MARKER, text)
+        self.assertIn("Route on what you can name", text)
+        self.assertNotIn(claudemd.CCE_TAG_PREFIX, text)
+
+    def test_replaces_the_cce_block_and_keeps_its_version_tag(self):
+        (self.root / "CLAUDE.md").write_text(
+            f"# House rules\n\nKeep it terse.\n\n{CCE_BLOCK}", encoding="utf-8"
+        )
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        text = self.claude_md()
+        self.assertIn("# House rules", text)
+        self.assertIn("Keep it terse.", text)
+        self.assertNotIn("You MUST use `context_search` instead", text)
+        self.assertIn(claudemd.AST_MARKER, text)
+        # The exact string `cce init` tests for equality before rewriting.
+        self.assertIn("<!-- cce-block-version: 4 -->", text)
+        self.assertIn(claudemd.CCE_END_MARKER, text)
+
+    def test_an_unknown_cce_version_is_carried_over_not_invented(self):
+        (self.root / "CLAUDE.md").write_text(
+            CCE_BLOCK.replace("version: 4", "version: 9"), encoding="utf-8"
+        )
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        self.assertIn("<!-- cce-block-version: 9 -->", self.claude_md())
+
+    def test_rerun_reports_unchanged(self):
+        args = ("init", "--root", str(self.root), "--no-index")
+        self.run_cli(*args)
+        first = self.claude_md()
+        _, out, _ = self.run_cli(*args)
+        self.assertEqual(first, self.claude_md())
+        self.assertIn("unchanged", out)
+
+    def test_with_cce_adds_the_semantic_route_and_memory(self):
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        standalone = self.claude_md()
+        self.assertNotIn("context_search", standalone)
+        self.assertNotIn("record_decision", standalone)
+        self.run_cli(
+            "init", "--root", str(self.root), "--no-index", "--with-cce"
+        )
+        paired = self.claude_md()
+        self.assertIn("context_search", paired)
+        self.assertIn("record_decision", paired)
+
+    def test_dry_run_writes_nothing(self):
+        self.run_cli(
+            "init", "--root", str(self.root), "--no-index", "--dry-run"
+        )
+        self.assertFalse((self.root / "CLAUDE.md").exists())
+
+    def test_a_cce_only_block_is_reported_as_drift(self):
+        (self.root / "CLAUDE.md").write_text(CCE_BLOCK, encoding="utf-8")
+        _, out, _ = self.run_cli(
+            "init", "--root", str(self.root), "--no-index", "--no-claude-md")
+        self.assertIn("`ast-mcp init` unifies it", out)
+
+    def test_no_drift_once_the_block_is_ours(self):
+        (self.root / "CLAUDE.md").write_text(CCE_BLOCK, encoding="utf-8")
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        self.assertIsNone(claudemd.drift(self.root))
+
+    def test_status_surfaces_drift(self):
+        (self.root / "CLAUDE.md").write_text(CCE_BLOCK, encoding="utf-8")
+        self.run_cli("init", "--root", str(self.root), "--no-claude-md")
+        _, out, _ = self.run_cli("status", "--root", str(self.root))
+        self.assertIn("`ast-mcp init` unifies it", out)
+        _, raw, _ = self.run_cli("status", "--root", str(self.root), "--json")
+        self.assertIsNotNone(json.loads(raw)["claude_md_drift"])

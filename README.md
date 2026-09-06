@@ -30,9 +30,16 @@ ast-mcp init
 ```
 
 That writes an `ast-mcp` stanza into `<repo>/.mcp.json`, adds `.ast_mcp/` to
-`.gitignore`, and builds the index. Claude Code reads `.mcp.json` at startup,
-so the next session in that directory has the tools already connected — no
-per-session step.
+`.gitignore`, writes a short retrieval-routing block into `CLAUDE.md`, and
+builds the index. Claude Code reads `.mcp.json` at startup, so the next
+session in that directory has the tools already connected — no per-session
+step.
+
+The `CLAUDE.md` block is what makes the agent actually reach for the tools;
+registration alone tends to leave them idle. It is about thirty lines and says
+one thing: name a symbol, key path or heading → these tools; describe
+behaviour you cannot name → your semantic retriever; about to edit a file, or
+need it byte-for-byte → `Read`. `--no-claude-md` skips it.
 
 `init` merges. Every other server in `.mcp.json` is left exactly as it was,
 and a file it cannot parse is reported rather than overwritten. Re-running it
@@ -55,7 +62,7 @@ instead. Override either with `--command "uv run ast-mcp serve"`.
 
 | command | what it does |
 |---|---|
-| `ast-mcp init` | register in `.mcp.json`, ignore the index dir, build the index |
+| `ast-mcp init` | register in `.mcp.json`, write the `CLAUDE.md` routing block, ignore the index dir, build the index |
 | `ast-mcp index [--rebuild]` | build or refresh the index; `--rebuild` discards it first |
 | `ast-mcp status [--json]` | file/symbol counts, index size, freshness, registration |
 | `ast-mcp savings [--json] [--reset]` | tokens served vs. what reading those files whole would have cost |
@@ -66,8 +73,8 @@ Every command takes `--root PATH`. Root resolution is `--root`, else
 `AST_MCP_ROOT`, else the working directory. Bare `ast-mcp` means `ast-mcp
 serve`.
 
-Only `init` writes anything outside `.ast_mcp/`, and only `.mcp.json` and
-`.gitignore`. The server itself never writes to your source.
+Only `init` writes anything outside `.ast_mcp/`, and only `.mcp.json`,
+`.gitignore` and `CLAUDE.md`. The server itself never writes to your source.
 
 ## Not every language gets the same treatment
 
@@ -136,6 +143,23 @@ the exact definition.
 Without the flag nothing changes and no CCE mention reaches the agent. Plain
 `ast-mcp init` prints a hint if it notices `context-engine` in `.mcp.json`;
 it never switches modes for you.
+
+### One block, not two
+
+CCE writes its own `CLAUDE.md` instructions, and they say to use
+`context_search` instead of reading files — with no mention of this server, so
+a named symbol gets routed to the semantic retriever too. Two blocks means two
+contradictory rules, and the loud one wins.
+
+So `init` replaces that block rather than adding a second one. It reuses CCE's
+own `<!-- cce-block-version: N -->` markers and keeps the value of `N` it finds
+on disk. CCE decides whether to rewrite by testing for its current tag, so a
+later `cce init` sees a match and leaves the file alone. Run `cce init` first,
+then `ast-mcp init`.
+
+If CCE later bumps that version and reclaims the slot, `ast-mcp status` says
+so — re-run `ast-mcp init` to take it back. Nothing outside the marked block
+is touched, at any point.
 
 ## What it costs
 

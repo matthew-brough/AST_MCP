@@ -41,6 +41,12 @@ here, described-but-unnamed behaviour there. Different failure modes, and the
 routing rule ships only when asked for. `init` may *hint* that CCE is
 registered; it never enables the mode on its own.
 
+**Registration is not adoption.** `.mcp.json` makes the tools reachable; the
+`CLAUDE.md` block (§I.claudemd) is what makes the agent reach for them, and
+CCE ships a block that says to route elsewhere. So `init` writes one routing
+block covering every retriever present, by default, in the slot CCE uses.
+`--no-claude-md` opts out.
+
 Read-only v1. Server never mutates user files. Agent still uses Edit/Write.
 
 **Not every language deserves the same treatment.** A `.py` file has functions
@@ -108,8 +114,10 @@ Only writable paths are `<root>/.ast_mcp/index.db` and
 `<root>/.ast_mcp/savings.db` (+ SQLite sidecars) — one cache, one ledger,
 both inside the ignored index dir and neither a source file. One
 scoped exception, outside the server: the CLI's `init` (§I.cli) writes
-`<root>/.mcp.json` and `<root>/.gitignore` — config, never source, never
-during `serve`. No other subcommand writes anything but the index.
+`<root>/.mcp.json`, `<root>/.gitignore`, and — unless `--no-claude-md` —
+`<root>/CLAUDE.md` (§I.claudemd). Config and agent instructions, never
+source, never during `serve`. No other subcommand writes anything but the
+index.
 
 **V5 degrade, never raise** — missing grammar, syntax error, unreadable file,
 bad query → valid payload with `errors: [{code, path, detail}]` and whatever
@@ -708,7 +716,7 @@ Six subcommands. Bare `ast-mcp`, or `ast-mcp` followed only by flags, means
 | command | writes | does |
 |---|---|---|
 | `serve [--root] [--with-cce]` | index only | stdio MCP server. what `.mcp.json` launches |
-| `init [--root] [--command CMD] [--with-cce] [--no-index] [--dry-run]` | `.mcp.json`, `.gitignore`, index | register + ignore + build |
+| `init [--root] [--command CMD] [--with-cce] [--no-claude-md] [--no-index] [--dry-run]` | `.mcp.json`, `.gitignore`, `CLAUDE.md`, index | register + route + ignore + build |
 | `index [--root] [--rebuild] [--verbose] [--quiet]` | index only | `refresh_all`, then counts + skips |
 | `status [--root] [--json]` | nothing | counts, size, age, registration |
 | `savings [--root] [--json] [--reset]` | ledger on `--reset` only | tokens served vs. whole-file reads |
@@ -731,10 +739,53 @@ fallback is `uvx`.
 status must not be the thing that writes one. `savings` follows the same rule:
 an unrecorded root reports zero and leaves the ledger absent.
 
-`--with-cce` is the only knob that changes what the agent is told, and it is
-off unless typed. Detecting a sibling retriever and silently rewriting the
-server's instructions would be the same class of surprise as rewriting a
-sibling `.mcp.json` key, which `init` refuses to do.
+`--with-cce` changes what the *server* tells the agent and is off unless
+typed: detecting a sibling retriever and silently rewriting the server's
+instructions would be the same class of surprise as rewriting a sibling
+`.mcp.json` key, which `init` refuses to do.
+
+The `CLAUDE.md` block (§I.claudemd) is the deliberate exception — on by
+default, `--no-claude-md` to skip. Registering the server without it produces
+a tool the agent does not reach for: the file the agent actually reads still
+says to route elsewhere, and `.mcp.json` alone does not argue back. `init`
+that registers a server the agent then ignores has not finished its job.
+The write stays bounded — it replaces only a CCE-owned or previously
+ast-mcp-owned span, never free prose — and always prints what it did.
+
+---
+
+### I.claudemd — the routing block
+
+`init` writes one block into `<root>/CLAUDE.md` that routes every retriever
+present. It exists because CCE's own block orders **"You MUST use
+`context_search` instead of reading files directly"** and names no tool from
+this server, so a nameable target — a symbol, key path or heading — gets sent
+to the semantic retriever instead of `get_symbol`. Two blocks in one file
+means two contradictory rules; the answer is one block, not a louder one.
+
+Three routes, in the block's own words: **name it** → these tools;
+**describe it** → `context_search`; **read it** (about to edit, or need it
+verbatim) → `Read`. The `context_search` route and CCE's memory loop appear
+only under `--with-cce`; standalone, the block names no other tool, same rule
+as §I.config.
+
+Placement is the mechanism. CCE bounds its block with
+`<!-- cce-block-version: N -->` … `<!-- /cce-block -->` and decides whether to
+rewrite by testing whether its *current* tag string appears in the file —
+equality, not ordering. So `init`:
+
+- replaces the span between those markers, **reusing the value of `N` it
+  found, never one it invented**. A later `cce init` matches its own tag and
+  returns without touching the file.
+- nests `<!-- ast-mcp-routing: 1 -->` inside. A CCE span without that marker
+  means CCE has bumped `N` and taken the slot back — `init` and `status`
+  report it (`claude_md_drift` in `--json`) and neither fixes it silently.
+- falls back to its own markers when CCE has never written here, and leaves
+  every byte outside the span alone. A file that does not exist is created;
+  an unreadable or unwritable one is reported and left as found (§V.5).
+
+A high tag value is the wrong defence: any value other than CCE's current one
+guarantees a mismatch, which is precisely what triggers the rewrite.
 
 ---
 
@@ -745,6 +796,7 @@ ast_mcp/
   __init__.py
   __main__.py        `python -m ast_mcp` -> cli.main
   cli.py             argv routing, init/index/status/savings/languages, serve
+  claudemd.py        the §I.claudemd routing block, CCE marker handling
   main.py            entry, MCPServer wiring, run(transport="stdio")
   languages.py       LangSpec registry (26 rows), load_language + fallback
   parser.py          bytes -> Tree, LRU cache keyed (path, mtime_ns, size)
@@ -809,6 +861,7 @@ stray `import httpx2` deleted.
 | T18 | x | CI + release workflows — test matrix 3.11–3.14, wheel query-file gate, tag/version check, PyPI trusted publishing | workflows present; release job refuses a tag that disagrees with `__version__` |
 | T19 | x | standalone-by-default instructions + `--with-cce` opt-in on `serve`/`init`, `init` hint on a registered `context-engine` key | `test_server.py`: default instructions name no other tool, flag appends the paragraph; `test_cli.py`: flag lands in the stanza, detection hints without enabling |
 | T20 | x | `savings.py` + `ast-mcp savings` — per-call ledger in its own db, baseline = whole-file read of every cited path, report + `--json` + `--reset`, `AST_MCP_NO_STATS` opt-out | `test_savings.py`: a server tool call lands in the ledger, saved = baseline - served, unrecorded root creates no db, a broken ledger never raises |
+| T21 | x | `claudemd.py` + `init` writing the routing block by default (§I.claudemd) — inside CCE's markers with the tag value found on disk, `--no-claude-md` to skip, drift surfaced by `init` and `status` | `test_cli.py::TestClaudeMd`: CCE block replaced with its tag kept, unknown tag carried not invented, surrounding user content survives, `--with-cce` gates the semantic route + memory, `--no-claude-md` writes nothing, drift reported |
 
 ### T1 gate script
 

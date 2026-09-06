@@ -1,8 +1,9 @@
 """Command line surface — `ast-mcp`.
 
 Six subcommands (SPEC §I.cli). Five are read-only; `init` is the single
-exception to §V.4 and touches exactly two files, both outside the source tree
-it indexes: `<root>/.mcp.json` and `<root>/.gitignore`.
+exception to §V.4 and touches at most three files, all outside the source tree
+it indexes: `<root>/.mcp.json`, `<root>/.gitignore`, and — unless
+`--no-claude-md` — `<root>/CLAUDE.md`.
 
 Invoking with no subcommand, or with flags only, runs `serve` — so the
 pre-CLI form `ast-mcp --root /path` keeps working.
@@ -20,7 +21,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from ast_mcp import __version__, savings
+from ast_mcp import __version__, claudemd, savings
 from ast_mcp.index import DB_DIRNAME, DB_FILENAME, Index
 from ast_mcp.languages import GROUPS, LANGS
 
@@ -176,6 +177,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         newest = index.conn.execute("SELECT max(indexed_at) FROM files").fetchone()[0]
 
     registered = _registered_command(root)
+    drift = claudemd.drift(root)
     if args.json:
         print(json.dumps({
             "root": str(root),
@@ -186,6 +188,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "counts": counts,
             "groups": dict(groups),
             "mcp_registered": registered,
+            "claude_md_drift": drift,
         }, indent=2))
         return 0
 
@@ -201,6 +204,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         age = max(0, int(time.time()) - int(newest))
         print(f"  last write {_human_age(age)} ago · {_human_bytes(_db_size(database))}")
     print(f"  .mcp.json: {registered or 'not registered — run `ast-mcp init`'}")
+    if drift:
+        print(f"  {drift}")
     return 0
 
 
@@ -369,6 +374,13 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"  `{CCE_SERVER_KEY}` is registered here — "
               "`ast-mcp init --with-cce` adds the routing guidance for both")
 
+    if args.claude_md:
+        print(f"  {claudemd.update(root, with_cce=args.with_cce, dry_run=args.dry_run)}")
+    else:
+        note = claudemd.drift(root)
+        if note:
+            print(f"  {note}")
+
     note = _update_gitignore(root, dry_run=args.dry_run)
     if note:
         print(f"  {note}")
@@ -522,6 +534,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="override how .mcp.json launches the server, e.g. \"uv run ast-mcp serve\"",
     )
     _add_with_cce(init)
+    init.add_argument(
+        "--claude-md", action=argparse.BooleanOptionalAction, default=True,
+        help="write the retrieval routing block into CLAUDE.md, replacing CCE's "
+             "block in place if it is there (default: on; --no-claude-md skips it)",
+    )
     init.add_argument("--no-index", action="store_true", help="register only, skip indexing")
     init.add_argument("--dry-run", action="store_true", help="print changes, write nothing")
     init.set_defaults(func=cmd_init)
