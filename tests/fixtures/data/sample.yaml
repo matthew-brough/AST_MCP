@@ -1,0 +1,10 @@
+# Service configuration.
+name: widget
+port: 8080
+tags:
+  - a
+  - b
+# Database settings.
+database:
+  host: localhost
+  pool: 5

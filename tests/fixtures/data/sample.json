@@ -1,0 +1,15 @@
+{
+  "name": "widget",
+  "port": 8080,
+  "debug": true,
+  "missing": null,
+  "tags": ["a", "b", "c"],
+  "server": {
+    "host": "localhost",
+    "retries": 3
+  },
+  "routes": [
+    { "path": "/a", "method": "GET" },
+    { "path": "/b", "method": "POST" }
+  ]
+}

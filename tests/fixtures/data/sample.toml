@@ -1,0 +1,12 @@
+# Project title.
+title = "widget"
+
+[server]
+host = "localhost"
+port = 8080
+
+[[items]]
+id = 1
+
+[[items]]
+id = 2
