@@ -1,0 +1,457 @@
+"""The six read-only tools.
+
+Every tool follows the same contract:
+
+* it declares ``profile`` and ``group`` before any payload (SPEC §V.12);
+* it revalidates each path it touches against the index (SPEC §V.3);
+* it fits the response to ``max_tokens`` and says so when it trims (§V.1);
+* it returns a valid payload for every failure it can hit (§V.5).
+
+Language dispatch happens once, in the registry. Nothing here branches on a
+language name — only on the *profile* a language was assigned (§V.6).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from tree_sitter import Query, QueryCursor
+
+from ast_mcp import Error
+from ast_mcp.index import Index
+from ast_mcp.languages import load_language
+from ast_mcp.parser import ParsedFile
+from ast_mcp.render import (
+    DEFAULT_MAX_TOKENS,
+    clip,
+    envelope,
+    estimate_tokens,
+    fit,
+    narrow_hint,
+    nest,
+    with_errors,
+)
+
+#: profile -> (payload key, table, id column, order column)
+PROFILE_TABLE = {
+    "symbols": ("symbols", "symbols", "qualified_name", "start_byte, end_byte DESC"),
+    "defs": ("symbols", "symbols", "qualified_name", "start_byte, end_byte DESC"),
+    "schema": ("schema", "schema_nodes", "key_path", "start_byte, end_byte DESC"),
+    "outline": ("outline", "doc_nodes", "slug", "start_byte, end_byte DESC"),
+}
+
+#: Default nesting depth per profile (SPEC §I.tools).
+DEFAULT_DEPTH = {"symbols": 2, "defs": 2, "outline": 2, "schema": 4}
+
+
+# --- tool 1: file_outline ----------------------------------------------------
+
+def file_outline(
+    index: Index,
+    path: str,
+    max_depth: int | None = None,
+    include_docstrings: bool = False,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> dict:
+    """The `Read` replacement: a file's shape, bodies elided."""
+    parsed, record, errors, failure = _resolve(index, path)
+    if failure is not None:
+        return failure
+
+    key, table, id_field, order = PROFILE_TABLE[record.profile]
+    depth = max_depth if max_depth is not None else DEFAULT_DEPTH[record.profile]
+    rows = index.rows_for_file(table, record.id, order)
+
+    items = [_row_to_item(r, record.profile, include_docstrings) for r in rows]
+    items = [i for i in items if _depth_of(i, items, id_field) <= depth]
+
+    payload = envelope(
+        path=record.path,
+        lang=record.lang,
+        group=record.group,
+        profile=record.profile,
+        line_count=parsed.line_count,
+    )
+    kept, truncated = fit(items, max_tokens, estimate_tokens(payload))
+    payload[key] = nest(kept, id_field, "parent")
+    payload["truncated"] = truncated
+    with_errors(payload, errors)
+    return narrow_hint(payload, "max_depth, include_docstrings")
+
+
+# --- tool 2: get_symbol ------------------------------------------------------
+
+def get_symbol(
+    index: Index,
+    name: str,
+    path: str | None = None,
+    mode: str = "source",
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> dict:
+    """One definition, by name or by key path. Ambiguity is reported (§V.9)."""
+    if mode not in {"source", "signature", "doc"}:
+        return with_errors(
+            envelope(found=False, ambiguous=False),
+            [Error("bad_mode", None, f"mode must be source|signature|doc, got {mode}")],
+        )
+
+    errors: list[Error] = []
+    scope: str | None = None
+    if path is not None:
+        parsed, record, file_errors, failure = _resolve(index, path)
+        if failure is not None:
+            return failure
+        errors.extend(file_errors)
+        scope = record.path
+    else:
+        errors.extend(index.refresh_all())
+
+    matches = _candidates(index, name, scope)
+    payload = envelope(found=False, ambiguous=False)
+
+    if not matches:
+        with_errors(payload, [*errors, Error("not_found", scope, name)])
+        return payload
+
+    if len(matches) > 1:
+        # SPEC §V.9 — never guess which one they meant.
+        payload["ambiguous"] = True
+        candidates = [
+            {
+                "qualified_name": r["qualified_name"],
+                "kind": r["kind"],
+                "profile": r["profile"],
+                "path": r["path"],
+                "start_line": r["start_line"],
+            }
+            for r in matches
+        ]
+        kept, truncated = fit(candidates, max_tokens, estimate_tokens(payload))
+        payload["candidates"] = kept
+        payload["truncated"] = truncated
+        with_errors(payload, errors)
+        return narrow_hint(payload, "path, or a fully qualified name")
+
+    row = matches[0]
+    parsed, _record, file_errors, failure = _resolve(index, row["path"])
+    if failure is not None:
+        return failure
+    errors.extend(file_errors)
+
+    symbol: dict[str, Any] = {
+        "name": row["name"],
+        "qualified_name": row["qualified_name"],
+        "kind": row["kind"],
+        "lang": row["lang"],
+        "profile": row["profile"],
+        "group": row["grp"],
+        "path": row["path"],
+        "start_line": row["start_line"],
+        "end_line": row["end_line"],
+        "start_byte": row["start_byte"],
+        "end_byte": row["end_byte"],
+        "signature": row["signature"],
+        "docstring": row["docstring"],
+    }
+    payload["found"] = True
+
+    if mode == "source":
+        source = parsed.slice(row["start_byte"], row["end_byte"])
+        budget = max_tokens - estimate_tokens({**payload, "symbol": symbol})
+        symbol["source"], payload["truncated"] = clip(source, budget)
+
+    payload["symbol"] = symbol
+    with_errors(payload, errors)
+    return narrow_hint(payload, 'mode="signature"')
+
+
+# --- tool 3: search_symbols --------------------------------------------------
+
+def search_symbols(
+    index: Index,
+    query: str,
+    kind: str | None = None,
+    lang: str | None = None,
+    group: str | None = None,
+    path_glob: str | None = None,
+    limit: int = 20,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> dict:
+    """Ranked lookup across every profile. Each hit declares its own (§V.12)."""
+    errors = index.refresh_all()
+    rows, total = index.search(
+        query, kind=kind, lang=lang, group=group, path_glob=path_glob, limit=limit
+    )
+    hits = [
+        {
+            "name": r["name"],
+            "qualified_name": r["qualified_name"],
+            "kind": r["kind"],
+            "lang": r["lang"],
+            "group": r["grp"],
+            "profile": r["profile"],
+            "path": r["path"],
+            "start_line": r["start_line"],
+            "end_line": r["end_line"],
+            "signature": r["signature"],
+        }
+        for r in rows
+    ]
+    payload = envelope(total_matches=total)
+    kept, truncated = fit(hits, max_tokens, estimate_tokens(payload))
+    payload["hits"] = kept
+    payload["truncated"] = truncated or len(rows) < total
+    with_errors(payload, errors)
+    return narrow_hint(payload, "kind, lang, group, path_glob, limit")
+
+
+# --- tool 4: get_docstrings --------------------------------------------------
+
+def get_docstrings(
+    index: Index,
+    path: str | None = None,
+    symbols: list[str] | None = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> dict:
+    """Docs without bodies. Symbols without docs are still listed."""
+    if (path is None) == (symbols is None):
+        return with_errors(
+            envelope(docs=[]),
+            [Error("bad_args", None, "pass exactly one of path or symbols")],
+        )
+
+    errors: list[Error] = []
+    docs: list[dict] = []
+    profile = group = None
+
+    if path is not None:
+        parsed, record, file_errors, failure = _resolve(index, path)
+        if failure is not None:
+            return failure
+        errors.extend(file_errors)
+        profile, group = record.profile, record.group
+        _key, table, _id_field, order = PROFILE_TABLE[record.profile]
+        for row in index.rows_for_file(table, record.id, order):
+            docs.append(_doc_entry(row, record.profile, record.path))
+    else:
+        errors.extend(index.refresh_all())
+        for wanted in symbols or []:
+            found = _candidates(index, wanted, None)
+            if not found:
+                errors.append(Error("not_found", None, wanted))
+                continue
+            for row in found:
+                docs.append(_doc_entry(row, row["profile"], row["path"]))
+
+    payload = envelope(profile=profile, group=group)
+    kept, truncated = fit(docs, max_tokens, estimate_tokens(payload))
+    payload["docs"] = kept
+    payload["truncated"] = truncated
+    with_errors(payload, errors)
+    return narrow_hint(payload, "symbols, or a narrower path")
+
+
+# --- tool 5: list_imports ----------------------------------------------------
+
+def list_imports(
+    index: Index, path: str, max_tokens: int = DEFAULT_MAX_TOKENS
+) -> dict:
+    """Dependency edges out of one file. Empty lists, never nulls."""
+    import json as _json
+
+    parsed, record, errors, failure = _resolve(index, path)
+    if failure is not None:
+        return failure
+
+    rows = index.rows_for_file("imports", record.id, "line")
+    imports = [
+        {
+            "module": r["module"],
+            "names": _json.loads(r["names"]),
+            "alias": r["alias"],
+            "line": r["line"],
+            "kind": r["kind"],
+        }
+        for r in rows
+    ]
+    exports: list[dict] = []
+    if record.profile in {"symbols", "defs"}:
+        from ast_mcp.extract import extract
+
+        exports = [
+            {"name": e.name, "kind": e.kind, "line": e.line}
+            for e in extract(parsed).exports
+        ]
+
+    payload = envelope(
+        path=record.path,
+        lang=record.lang,
+        group=record.group,
+        profile=record.profile,
+        exports=exports,
+    )
+    kept, truncated = fit(imports, max_tokens, estimate_tokens(payload))
+    payload["imports"] = kept
+    payload["truncated"] = truncated
+    with_errors(payload, errors)
+    return narrow_hint(payload, "a narrower path")
+
+
+# --- tool 6: ast_query -------------------------------------------------------
+
+def ast_query(
+    index: Index,
+    path: str,
+    query: str,
+    captures: list[str] | None = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+) -> dict:
+    """Raw tree-sitter S-expression. The escape hatch, profile-independent."""
+    parsed, record, errors, failure = _resolve(index, path)
+    if failure is not None:
+        return failure
+
+    payload = envelope(
+        path=record.path, lang=record.lang, group=record.group,
+        profile=record.profile, matches=[],
+    )
+    language = load_language(record.lang)
+    if language is None:
+        return with_errors(payload, [*errors, Error("no_grammar", record.path, record.lang)])
+
+    try:
+        compiled = Query(language, query)
+        results = QueryCursor(compiled).matches(parsed.tree.root_node)
+    except Exception as exc:  # noqa: BLE001 — §V.5, a bad query is data, not a crash
+        return with_errors(
+            payload,
+            [*errors, Error("bad_query", record.path, f"{type(exc).__name__}: {exc}")],
+        )
+
+    wanted = set(captures) if captures else None
+    matches: list[dict] = []
+    for _pattern_index, caps in results:
+        for capture_name, nodes in caps.items():
+            if wanted is not None and capture_name not in wanted:
+                continue
+            for node in nodes:
+                matches.append({
+                    "capture": capture_name,
+                    "node_type": node.type,
+                    "start_line": node.start_point[0] + 1,
+                    "end_line": node.end_point[0] + 1,
+                    "start_byte": node.start_byte,
+                    "end_byte": node.end_byte,
+                    "text": parsed.slice(node.start_byte, node.end_byte),
+                })
+
+    kept, truncated = fit(matches, max_tokens, estimate_tokens(payload))
+    payload["matches"] = kept
+    payload["truncated"] = truncated
+    with_errors(payload, errors)
+    return narrow_hint(payload, "captures, or a more specific query")
+
+
+# --- shared ------------------------------------------------------------------
+
+def _resolve(index: Index, path: str):
+    """Revalidate a path and fetch its index row (SPEC §V.3).
+
+    Returns ``(parsed, record, errors, failure_payload)``. When
+    ``failure_payload`` is not None the caller returns it unchanged.
+    """
+    relative = index.relative(path)
+    parsed, errors = index.refresh_file(relative)
+    if parsed is None:
+        return None, None, errors, with_errors(
+            envelope(path=relative, profile=None, group=None), errors
+        )
+    record = index.file_record(relative)
+    if record is None:
+        errors = [*errors, Error("not_indexed", relative, "file could not be indexed")]
+        return None, None, errors, with_errors(
+            envelope(path=relative, profile=None, group=None), errors
+        )
+    return parsed, record, errors, None
+
+
+def _row_to_item(row, profile: str, include_docstrings: bool) -> dict:
+    if profile in {"symbols", "defs"}:
+        item = {
+            "name": row["name"],
+            "qualified_name": row["qualified_name"],
+            "kind": row["kind"],
+            "signature": row["signature"],
+            "start_line": row["start_line"],
+            "end_line": row["end_line"],
+            "parent": row["parent"],
+        }
+        if include_docstrings:
+            item["docstring"] = row["docstring"]
+        return item
+    if profile == "schema":
+        item = {
+            "key_path": row["key_path"],
+            "kind": row["kind"],
+            "value_preview": row["value_preview"],
+            "children_count": row["children_count"],
+            "truncated_subtree": bool(row["truncated_subtree"]),
+            "start_line": row["start_line"],
+            "end_line": row["end_line"],
+            "parent": row["parent"],
+        }
+        if include_docstrings:
+            item["comment"] = row["comment"]
+        return item
+    return {
+        "title": row["title"],
+        "slug": row["slug"],
+        "level": row["level"],
+        "kind": row["kind"],
+        "info": row["info"],
+        "start_line": row["start_line"],
+        "end_line": row["end_line"],
+        "parent": row["parent"],
+    }
+
+
+def _depth_of(item: dict, items: list[dict], id_field: str) -> int:
+    """Nesting depth, 1-based, following the parent chain within this file."""
+    by_id = {i[id_field]: i for i in items}
+    depth, current, seen = 1, item, 0
+    while current.get("parent") is not None and seen < 64:
+        parent = by_id.get(current["parent"])
+        if parent is None:
+            break
+        depth, current, seen = depth + 1, parent, seen + 1
+    return depth
+
+
+def _doc_entry(row, profile: str, path: str) -> dict:
+    keys = row.keys()
+    if profile in {"symbols", "defs"}:
+        name, doc, signature = row["qualified_name"], row["docstring"], row["signature"]
+    elif profile == "schema":
+        name, doc, signature = row["key_path"], row["comment"], None
+    else:
+        name, doc, signature = row["slug"], None, row["title"]
+    return {
+        "qualified_name": name,
+        "kind": row["kind"],
+        "path": path,
+        "start_line": row["start_line"],
+        "signature": signature,
+        "docstring": doc,
+        "profile": profile,
+    }
+
+
+def _candidates(index: Index, name: str, scope: str | None) -> list:
+    """Exact matches first; only fall back to substring when there are none."""
+    rows, _total = index.search(name, path_glob=scope, limit=200)
+    lowered = name.lower()
+    exact = [
+        r for r in rows
+        if r["qualified_name"].lower() == lowered or r["name"].lower() == lowered
+    ]
+    return exact or rows
