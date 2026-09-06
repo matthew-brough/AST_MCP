@@ -48,13 +48,14 @@ KIND_RANK = {
     "var": 0, "const": 1, "module": 2, "type": 2, "rule": 3, "index": 3,
     "function": 4, "class": 5, "interface": 5, "struct": 5, "enum": 5,
     "message": 5, "service": 5, "table": 5, "view": 5, "resource": 5,
-    "stage": 5, "block": 5, "method": 6, "rpc": 6,
+    "stage": 5, "block": 5, "handler": 4, "method": 6, "rpc": 6,
 }
 
 #: Call/command names that mean "pull in another file". Anything else captured
 #: as ``@import.callee`` is not an import and the match is discarded.
 IMPORT_CALLEES = frozenset({
     "require", "require_relative", "import", "library", "source", "include", ".",
+    "module",
 })
 
 #: Container kinds whose direct function children are methods, not functions.

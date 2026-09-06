@@ -135,6 +135,41 @@ class TestLua(unittest.TestCase):
         self.assertTrue(doc.startswith("--- Adds two numbers."))
         self.assertIn("@param", doc)
 
+    def test_string_keyed_handlers_are_named_by_their_string(self):
+        """The FiveM/CFX idiom: the string argument is the only name there is."""
+        _, ex = run("sample.lua")
+        handlers = [s for s in ex.symbols if s.kind == "handler"]
+        self.assertEqual(
+            [s.qualified_name for s in handlers],
+            ["sample:ping", "sample:ping", "getWidget"],
+        )
+        self.assertEqual(
+            handlers[0].signature,
+            'RegisterNetEvent("sample:ping", function(payload)',
+        )
+
+    def test_repeated_event_names_stay_separate_symbols(self):
+        """Two listeners on one event are two definitions, not one overwritten."""
+        _, ex = run("sample.lua")
+        pings = [s for s in ex.symbols if s.qualified_name == "sample:ping"]
+        self.assertEqual(len(pings), 2)
+        self.assertEqual(len({s.start_line for s in pings}), 2)
+
+    def test_handler_rule_stays_off_plain_callbacks(self):
+        """A dotted callee is a call with a callback, not a definition."""
+        _, ex = run("sample.lua")
+        self.assertNotIn("sample/select", by_qname(ex))
+
+    def test_concatenated_event_name_is_not_a_symbol(self):
+        """SPEC §V.13 — half a literal would be a fake name."""
+        _, ex = run("sample.lua")
+        self.assertFalse([s for s in ex.symbols if s.name.startswith("dyn:")])
+
+    def test_module_loader_is_an_import(self):
+        _, ex = run("sample.lua")
+        modules = {(i.kind, i.module) for i in ex.imports}
+        self.assertIn(("require", "vrp"), modules)
+
 
 class TestDocstringHelpers(unittest.TestCase):
     def test_blank_line_breaks_the_association(self):

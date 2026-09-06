@@ -44,6 +44,9 @@ GOLDEN = {
         ("function", "M.add"),
         ("method", "M:render"),
         ("function", "helper"),
+        ("handler", "sample:ping"),
+        ("handler", "sample:ping"),
+        ("handler", "getWidget"),
     ],
     "src/data/schema.proto": [
         ("message", "User"),
