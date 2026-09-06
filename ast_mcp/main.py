@@ -29,6 +29,12 @@ profile: `symbols` for code, `schema` for data files (JSON/YAML/TOML/XML/CSV),
 Start with file_outline to see a file's shape, then get_symbol to pull just the
 definition you need. search_symbols finds things by name across the repo.
 ast_query is the escape hatch when the typed tools do not fit.
+
+On a data file, `file_outline` already answers "how many records and what
+fields": every collection carries `children_count` and a `uniformity` of
+`uniform` / `mixed` / `unverified`. No value is returned from inside a
+collection, so the shape never costs you the data. Do not read the file to
+recount what the outline counted.
 """
 
 #: Appended to ``INSTRUCTIONS`` when the operator opts in with `serve
@@ -102,14 +108,22 @@ def file_outline(
     path: str,
     max_depth: int | None = None,
     include_docstrings: bool = False,
+    mode: str = "full",
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
     """Outline one file: definitions, key paths or headings, bodies elided.
 
     Use this instead of reading a file to find out what is in it.
+
+    mode: "full" (default) or "names" — names, lines and counts only, for
+    enumerating what a file defines.
+    On a data file this answers record count and field types without returning
+    any value from inside a collection: each collection carries
+    `children_count` and `uniformity` ("uniform" — every element has element
+    0's keys; "mixed" — they differ; "unverified" — too many to check).
     """
     return tools.file_outline(
-        get_index(), path, max_depth, include_docstrings, max_tokens
+        get_index(), path, max_depth, include_docstrings, mode, max_tokens
     )
 
 

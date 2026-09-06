@@ -25,7 +25,7 @@ from ast_mcp.extract_schema import extract_schema
 from ast_mcp.languages import spec_for_path
 from ast_mcp.parser import ParsedFile, parse_file, size_limit, stat_key
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DB_DIRNAME = ".ast_mcp"
 DB_FILENAME = "index.db"
 
@@ -106,7 +106,8 @@ CREATE TABLE schema_nodes (
   value_preview     TEXT,
   comment           TEXT,
   children_count    INTEGER NOT NULL DEFAULT 0,
-  truncated_subtree INTEGER NOT NULL DEFAULT 0
+  truncated_subtree INTEGER NOT NULL DEFAULT 0,
+  uniformity        TEXT
 );
 
 CREATE TABLE doc_nodes (
@@ -309,11 +310,11 @@ class Index:
             self.conn.executemany(
                 "INSERT INTO schema_nodes (file_id, key_path, kind, parent,"
                 " start_byte, end_byte, start_line, end_line, value_preview,"
-                " comment, children_count, truncated_subtree)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " comment, children_count, truncated_subtree, uniformity)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [(file_id, n.key_path, n.kind, n.parent, n.start_byte, n.end_byte,
                   n.start_line, n.end_line, n.value_preview, n.comment,
-                  n.children_count, int(n.truncated_subtree))
+                  n.children_count, int(n.truncated_subtree), n.uniformity)
                  for n in extraction.nodes],
             )
 

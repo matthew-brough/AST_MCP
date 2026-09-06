@@ -79,8 +79,13 @@ response — agent never guesses fidelity (§V.12).
 - No embeddings, no ranking model. CCE owns semantic.
 - No file watcher daemon. Invalidation is pull-based per §V.3.
 - No LSP. Grammar-only, no type inference.
-- No CSV row data. `schema` profile returns columns + row count, never rows.
-  Reading data is not this server's job.
+- No row data at all. `schema` profile returns key paths, types and counts,
+  never values from inside a collection — a CSV cell, an array element's
+  string, one record's field. Reading data is not this server's job, and one
+  element's value presented as the collection's shape is still that element's
+  data. `value_preview` survives only on a scalar that is *not* inside a
+  collapsed collection: `port: 8080` in a config, nothing out of a 1028-record
+  `ban_list.json`.
 - No inline markdown parsing. Headings/blocks/tables only; `markdown_inline`
   grammar stays unloaded.
 - No POD (perl), no reStructuredText, no javadoc-style HTML rendering. Doc
@@ -159,6 +164,17 @@ collection w/ `children_count` + the shape of element 0. A 5000-row JSON array
 costs the same tokens as a 3-row one. Depth capped by `max_depth` (default 4);
 deeper subtrees emit a leaf w/ `kind` and `truncated_subtree: true`.
 
+**The collapse states its own confidence.** Element 0 is described; whether the
+rest match is *checked*, not assumed, and reported as `uniformity` on every
+collapsed collection: `uniform` (every element carries element 0's key set /
+value kind), `mixed` (they differ), `unverified` (more than `SCAN_LIMIT` = 5000
+elements — too many to check without paying for the file). Key **names** only;
+values are never read and no node is added, so cost stays flat in element
+count. A collapse that cannot be distinguished from a lie sends the agent to
+`json.load` — which is the whole cost the profile exists to avoid. Applies to
+JSON/YAML arrays, repeated TOML `[[table]]` blocks, repeated XML siblings, and
+CSV columns alike.
+
 **V12 profile is declared** — every tool response carries `profile` and `group`.
 Agent must not assume a `symbols` key exists; `schema` profile fills `schema`,
 `outline` profile fills `outline`. Payload key is a function of profile, and
@@ -181,7 +197,7 @@ All tools: `max_tokens: int = 4000`. All responses carry
 
 ---
 
-`file_outline(path: str, max_depth: int | None = None, include_docstrings: bool = False, max_tokens: int = 4000)`
+`file_outline(path: str, max_depth: int | None = None, include_docstrings: bool = False, mode: str = "full" | "names", max_tokens: int = 4000)`
 
 The `Read` replacement. Payload key depends on profile (§V.12).
 
@@ -190,7 +206,8 @@ The `Read` replacement. Payload key depends on profile (§V.12).
      symbols?: [ { name, qualified_name, kind, signature,
                    start_line, end_line, docstring?, children: [...] } ],
      schema?:  [ { key_path, kind, value_preview, children_count,
-                   start_line, end_line, comment?, children: [...] } ],
+                   uniformity?, start_line, end_line, comment?,
+                   children: [...] } ],
      outline?: [ { title, slug, level, kind,
                    start_line, end_line, children: [...] } ],
      truncated, errors }
@@ -198,6 +215,15 @@ The `Read` replacement. Payload key depends on profile (§V.12).
 
 Exactly one of `symbols` / `schema` / `outline` present, per I.profiles.
 `max_depth` defaults to 2 for `symbols`/`defs`/`outline`, 4 for `schema`.
+`uniformity` is present only on a collapsed collection (§V.11).
+
+`mode="names"` drops every field that is not an address or a count:
+`symbols`/`defs` → `qualified_name` + `start_line`; `schema` → `key_path`,
+`kind`, `children_count`, `uniformity`; `outline` → `slug` + `level` +
+`start_line`. **Enumeration** — "list every function in this file" — is the one
+question a `grep -n '^function'` answers more cheaply than a full outline, and
+`names` is what takes it back. Unknown mode → `bad_mode` error payload, never a
+guess (§V.5).
 `signature` is the declaration header w/ params and return type, body excluded.
 
 ---
@@ -410,7 +436,7 @@ load and parse clean. See §T.11 for the probe. Pack ABI is 14 or 15 except
 |---|---|---|---|
 | `symbols` | `symbols` | `Symbol` | name, qualified_name, kind, signature, docstring, parent, ranges |
 | `defs` | `symbols` | `Symbol` | same shape; `docstring` often `null`, `parent` often `null` |
-| `schema` | `schema` | `SchemaNode` | key_path, kind, value_preview, comment, children_count, ranges |
+| `schema` | `schema` | `SchemaNode` | key_path, kind, value_preview, comment, children_count, uniformity, ranges |
 | `outline` | `outline` | `DocNode` | title, slug, level, kind, parent, ranges |
 
 `defs` reuses the `Symbol` record deliberately — same shape, weaker guarantees,
@@ -481,10 +507,12 @@ class SchemaNode:
     end_byte: int
     start_line: int
     end_line: int
-    value_preview: str | None    # scalars only, <= 80 chars, elided w/ "…"
+    value_preview: str | None    # scalars only, <= 80 chars, elided w/ "…";
+                                 # None inside a collapsed collection (§G)
     comment: str | None          # leading comment on the key, verbatim (§V.7)
     children_count: int          # array len / object key count / csv row count
     truncated_subtree: bool      # depth cap hit (§V.11)
+    uniformity: str | None       # uniform|mixed|unverified; collections only (§V.11)
     parent: str | None           # parent key_path
 ```
 
@@ -600,7 +628,8 @@ CREATE TABLE schema_nodes (
   value_preview     TEXT,
   comment           TEXT,
   children_count    INTEGER NOT NULL DEFAULT 0,
-  truncated_subtree INTEGER NOT NULL DEFAULT 0
+  truncated_subtree INTEGER NOT NULL DEFAULT 0,
+  uniformity        TEXT
 );
 
 CREATE TABLE doc_nodes (
@@ -802,6 +831,7 @@ ast_mcp/
   parser.py          bytes -> Tree, LRU cache keyed (path, mtime_ns, size)
   extract.py         dispatch on profile; Symbol/Import for symbols+defs
   extract_schema.py  SchemaNode for data group; NODE_KINDS map; §V.11 collapse
+                     + uniformity scan; previews suppressed in collections (§G)
   extract_doc.py     DocNode for markdown + html; slug generation
   index.py           SQLite schema, upsert, staleness, walk
   tools.py           6 tool impls, profile dispatch
@@ -847,14 +877,14 @@ stray `import httpx2` deleted.
 | T4 | x | `queries/core/*.scm` — tag queries. python first, then js/ts/tsx/go/lua | each `.scm` compiles via `Query(lang, src)` |
 | T5 | x | `extract.py` — captures→`Symbol`, `preceding_comment_block`, `python_docstring`, imports | `test_extract.py` golden symbol lists per fixture |
 | T6 | x | `index.py` — schema, upsert, staleness check, walk | `test_index.py`: edit fixture → next query reflects it (§V.3) |
-| T7 | x | `tools.py` + `render.py` — 6 tools, **profile dispatch** (§V.12), budget trim, error payloads | `test_tools.py`: each tool × each profile, incl. ambiguity (§V.9) + bad query (§V.5) |
+| T7 | x | `tools.py` + `render.py` — 6 tools, **profile dispatch** (§V.12), budget trim, error payloads, `file_outline` `mode="names"` | `test_tools.py`: each tool × each profile, incl. ambiguity (§V.9) + bad query (§V.5); `names` costs < half of `full`, bad mode reported |
 | T8 | x | `main.py` — MCPServer wiring, stdio, `.mcp.json` entry | server starts, `tools/list` returns 6 |
 | T9 | x | tests — core fixtures, golden outlines, staleness, budget | full suite green |
 | T10 | x | `README.md` + agent usage guidance (standalone use, the optional CCE `context_search` split, and which profile each group gets) | doc exists, documents 4 profiles, CCE section reads as optional |
 | T11 | x | probe language-pack for all 20 non-core grammars under ts 0.26 | every name loads + parses w/o `has_error` |
 | T12 | x | extend registry to 26 rows: `LangSpec` w/ `group` + `profile`, filename matching for Dockerfile | `test_languages.py`: all 26 resolve, every `source` loads, unknown ext → `None` |
 | T13 | x | `queries/defs/*.scm` ×12 — ruby, perl, r, bash, zsh, css, scss, sql, graphql, proto, terraform, dockerfile | each compiles via `Query(lang, src)`; golden symbol list per fixture |
-| T14 | x | `extract_schema.py` — `NODE_KINDS` for json/json5/yaml/toml/xml/csv, key-path building, type inference, §V.11 collapse + depth cap | 5000-row array fixture emits 1 array node; token count flat vs 3-row fixture |
+| T14 | x | `extract_schema.py` — `NODE_KINDS` for json/json5/yaml/toml/xml/csv, key-path building, type inference, §V.11 collapse + depth cap + `uniformity` scan, no preview inside a collection (§G) | 5000-row array fixture emits 1 array node; token count flat vs 3-row fixture; mixed key sets report `mixed`, over-`SCAN_LIMIT` reports `unverified`; `routes[].path` and CSV columns carry no `value_preview` |
 | T15 | x | `extract_doc.py` — markdown heading tree + fenced blocks + tables; html headings/landmarks/ids; slug dedup | `test_extract_doc.py`: nesting correct across skipped levels (h1→h3), dup titles get `-1` |
 | T16 | x | `cli.py` — 5 subcommands, argv routing, `.mcp.json` merge, `.gitignore` entry, ephemeral-launcher detection | `test_cli.py`: bare argv -> serve, sibling servers survive, unparseable `.mcp.json` refused, rerun idempotent, `uvx` launcher not recorded |
 | T17 | x | packaging — hatchling, console script `ast-mcp`, py3.11 floor, wheel carries every `.scm`, LICENSE | `uv build` then handshake the wheel: `tools/list` returns 6, `file_outline` extracts |

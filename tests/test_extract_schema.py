@@ -3,7 +3,7 @@
 import unittest
 from pathlib import Path
 
-from ast_mcp.extract_schema import extract_schema
+from ast_mcp.extract_schema import SCAN_LIMIT, extract_schema
 from ast_mcp.parser import parse_file
 
 FIXTURES = Path(__file__).parent / "fixtures" / "data"
@@ -58,6 +58,58 @@ class TestJson(unittest.TestCase):
         _parsed, _ex, nodes = run("sample.json", max_depth=1)
         self.assertTrue(nodes["server"].truncated_subtree)
         self.assertNotIn("server.host", nodes)
+
+
+class TestUniformity(unittest.TestCase):
+    """SPEC §V.11 — the collapse reports whether element 0 was representative."""
+
+    def test_uniform_array_says_so(self):
+        _p, _ex, nodes = run("sample.json")
+        self.assertEqual(nodes["routes"].uniformity, "uniform")
+
+    def test_differing_key_sets_are_mixed(self):
+        _p, _ex, nodes = run("mixed.json")
+        self.assertEqual(nodes["records"].uniformity, "mixed")
+
+    def test_differing_scalar_kinds_are_mixed(self):
+        _p, _ex, nodes = run("mixed.json")
+        self.assertEqual(nodes["tokens"].uniformity, "mixed")
+
+    def test_scalars_carry_no_uniformity(self):
+        _p, _ex, nodes = run("sample.json")
+        self.assertIsNone(nodes["name"].uniformity)
+        self.assertIsNone(nodes["server"].uniformity)
+
+    def test_oversized_collection_is_unverified_not_guessed(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "huge.json"
+            body = ",".join('{"id": 1}' for _ in range(SCAN_LIMIT + 1))
+            path.write_text('{"rows": [' + body + "]}")
+            parsed, _errors = parse_file(path)
+            assert parsed is not None
+            nodes = {n.key_path: n for n in extract_schema(parsed).nodes}
+            self.assertEqual(nodes["rows"].children_count, SCAN_LIMIT + 1)
+            self.assertEqual(nodes["rows"].uniformity, "unverified")
+
+
+class TestPreviewsStopAtCollections(unittest.TestCase):
+    """SPEC §G — shape, never rows. One element's data is still data."""
+
+    def test_top_level_scalars_keep_their_preview(self):
+        _p, _ex, nodes = run("sample.json")
+        self.assertEqual(nodes["port"].value_preview, "8080")
+
+    def test_scalars_inside_a_collapsed_array_have_none(self):
+        _p, _ex, nodes = run("sample.json")
+        self.assertIsNone(nodes["routes[].path"].value_preview)
+        self.assertIsNone(nodes["routes[].method"].value_preview)
+
+    def test_repeated_toml_tables_suppress_previews(self):
+        _p, _ex, nodes = run("sample.toml")
+        self.assertIsNotNone(nodes["server.host"].value_preview)
+        self.assertIsNone(nodes["items[].id"].value_preview)
 
 
 class TestYaml(unittest.TestCase):

@@ -52,9 +52,15 @@ def file_outline(
     path: str,
     max_depth: int | None = None,
     include_docstrings: bool = False,
+    mode: str = "full",
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
     """The `Read` replacement: a file's shape, bodies elided."""
+    if mode not in {"full", "names"}:
+        return with_errors(
+            envelope(path=path, profile=None, group=None),
+            [Error("bad_mode", None, f"mode must be full|names, got {mode}")],
+        )
     parsed, record, errors, failure = _resolve(index, path)
     if failure is not None:
         return failure
@@ -63,7 +69,7 @@ def file_outline(
     depth = max_depth if max_depth is not None else DEFAULT_DEPTH[record.profile]
     rows = index.rows_for_file(table, record.id, order)
 
-    items = [_row_to_item(r, record.profile, include_docstrings) for r in rows]
+    items = [_row_to_item(r, record.profile, include_docstrings, mode) for r in rows]
     items = [
         item for item, own in zip(items, _depths(items, id_field)) if own <= depth
     ]
@@ -79,7 +85,7 @@ def file_outline(
     payload[key] = nest(kept, id_field, "parent")
     payload["truncated"] = truncated
     with_errors(payload, errors)
-    hinted = narrow_hint(payload, "max_depth, include_docstrings")
+    hinted = narrow_hint(payload, 'max_depth, include_docstrings, mode="names"')
     return enforce(hinted, (key,), max_tokens)
 
 
@@ -455,7 +461,9 @@ def _candidate_fields(row) -> dict[str, Any]:
     }
 
 
-def _row_to_item(row, profile: str, include_docstrings: bool) -> dict:
+def _row_to_item(row, profile: str, include_docstrings: bool, mode: str = "full") -> dict:
+    if mode == "names":
+        return _name_item(row, profile)
     if profile in {"symbols", "defs"}:
         item = {
             "name": row["name"],
@@ -480,6 +488,9 @@ def _row_to_item(row, profile: str, include_docstrings: bool) -> dict:
             "end_line": row["end_line"],
             "parent": row["parent"],
         }
+        # Only a collapsed collection has a uniformity to report (SPEC §V.11).
+        if row["uniformity"] is not None:
+            item["uniformity"] = row["uniformity"]
         if include_docstrings:
             item["comment"] = row["comment"]
         return item
@@ -491,6 +502,36 @@ def _row_to_item(row, profile: str, include_docstrings: bool) -> dict:
         "info": row["info"],
         "start_line": row["start_line"],
         "end_line": row["end_line"],
+        "parent": row["parent"],
+    }
+
+
+def _name_item(row, profile: str) -> dict:
+    """`mode="names"` — enough to address a definition and nothing else.
+
+    Enumeration is the one shape a `grep -n` beats a full outline on. This is
+    the form that wins it back (SPEC §I.tools).
+    """
+    if profile in {"symbols", "defs"}:
+        return {
+            "qualified_name": row["qualified_name"],
+            "start_line": row["start_line"],
+            "parent": row["parent"],
+        }
+    if profile == "schema":
+        item = {
+            "key_path": row["key_path"],
+            "kind": row["kind"],
+            "children_count": row["children_count"],
+            "parent": row["parent"],
+        }
+        if row["uniformity"] is not None:
+            item["uniformity"] = row["uniformity"]
+        return item
+    return {
+        "slug": row["slug"],
+        "level": row["level"],
+        "start_line": row["start_line"],
         "parent": row["parent"],
     }
 

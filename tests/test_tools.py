@@ -81,6 +81,39 @@ class TestFileOutline(ToolTestBase):
         self.assertEqual(len(big["schema"]), len(small["schema"]))
         self.assertFalse(big["truncated"])
 
+    def test_names_mode_costs_less_than_the_full_outline(self):
+        """SPEC §I.tools — enumeration is what `grep -n` wins; this takes it back."""
+        from ast_mcp.render import estimate_tokens
+
+        full = tools.file_outline(self.index, "src/core/sample.py")
+        names = tools.file_outline(self.index, "src/core/sample.py", mode="names")
+        self.assertLess(
+            estimate_tokens(names["symbols"]), estimate_tokens(full["symbols"]) / 2
+        )
+        self.assertNotIn("signature", names["symbols"][0])
+        self.assertIn("qualified_name", names["symbols"][0])
+        self.assertIn("start_line", names["symbols"][0])
+
+    def test_names_mode_keeps_schema_counts(self):
+        result = tools.file_outline(self.index, "src/data/small.csv", mode="names")
+        column = result["schema"][0]
+        self.assertEqual(column["children_count"], 3)
+        self.assertNotIn("value_preview", column)
+
+    def test_unknown_mode_is_reported_not_guessed(self):
+        result = tools.file_outline(self.index, "src/core/sample.py", mode="brief")
+        self.assertEqual([e["code"] for e in result["errors"]], ["bad_mode"])
+
+    def test_schema_outline_declares_uniformity_and_leaks_no_rows(self):
+        """SPEC §V.11, §G — the count is trustworthy, the rows stay in the file."""
+        result = tools.file_outline(self.index, "src/data/mixed.json")
+        by_path = {n["key_path"]: n for n in result["schema"]}
+        self.assertEqual(by_path["records"]["uniformity"], "mixed")
+        self.assertEqual(by_path["records"]["children_count"], 3)
+        self.assertNotIn("uniformity", by_path["secret"])
+        element = by_path["records"]["children"][0]
+        self.assertIsNone(element["value_preview"])
+
     def test_budget_trims_and_names_the_narrowing_argument(self):
         """SPEC §V.1 — never silently drop."""
         result = tools.file_outline(self.index, "src/core/sample.py", max_tokens=1)

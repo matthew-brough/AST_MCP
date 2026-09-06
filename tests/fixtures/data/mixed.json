@@ -1,0 +1,9 @@
+{
+  "records": [
+    { "id": 1, "name": "alpha" },
+    { "id": 2, "name": "beta", "extra": true },
+    { "id": 3 }
+  ],
+  "tokens": ["a", 2],
+  "secret": "top-level-scalars-keep-previews"
+}

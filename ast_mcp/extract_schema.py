@@ -7,7 +7,13 @@ inferred value type, a short preview, and any comment sitting above the key.
 SPEC §V.11 is the load-bearing rule here. Homogeneous arrays and CSV rows
 collapse to a single node carrying ``children_count``, so a 5000-row file
 costs the same as a 3-row one. Without that the profile would defeat the
-purpose of the server.
+purpose of the server. The collapse says so: every collapsed collection
+carries ``uniformity``, checked across the element *key sets*, so a caller
+never has to read the file to find out whether element 0 was representative.
+
+SPEC §G — this profile returns shape, never rows. A scalar inside a collapsed
+collection therefore gets no ``value_preview``: one element's data presented
+as the collection's shape is exactly the leak the profile exists to avoid.
 
 SPEC §V.13: kinds are *value types* (``object``, ``array``, ``string``, …).
 Nothing in here ever claims to be a function or a class.
@@ -29,8 +35,10 @@ from ast_mcp.parser import ParsedFile
 
 DEFAULT_MAX_DEPTH = 4
 PREVIEW_CHARS = 80
-#: How many data rows a CSV column's type is inferred from.
-CSV_SAMPLE_ROWS = 50
+#: Elements scanned when checking a collapsed collection for a single shape.
+#: Beyond this the collection reports ``unverified`` rather than guessing.
+SCAN_LIMIT = 5000
+UNIFORM, MIXED, UNVERIFIED = "uniform", "mixed", "unverified"
 
 #: Per-grammar node names for the roles the walker needs (SPEC §I.layout).
 NODE_KINDS: dict[str, dict[str, frozenset[str] | str]] = {
@@ -93,6 +101,7 @@ class SchemaNode:
     children_count: int
     truncated_subtree: bool
     parent: str | None
+    uniformity: str | None = None
 
 
 @dataclass(slots=True)
@@ -137,6 +146,7 @@ def _walk_tree(
     depth: int,
     max_depth: int,
     out: SchemaExtraction,
+    in_collection: bool = False,
 ) -> None:
     table = NODE_KINDS[parsed.spec.lang]
     node = _unwrap(node, table)
@@ -153,11 +163,16 @@ def _walk_tree(
                 continue
             key = _scalar_text(parsed, key_node)
             path = f"{prefix}.{key}" if prefix else key
-            _emit_value(parsed, pair, value_node, path, parent, depth, max_depth, out)
+            _emit_value(
+                parsed, pair, value_node, path, parent, depth, max_depth, out,
+                in_collection,
+            )
         return
 
     if node.type in table["sequence"]:
-        _emit_value(parsed, node, node, prefix, parent, depth, max_depth, out)
+        _emit_value(
+            parsed, node, node, prefix, parent, depth, max_depth, out, in_collection
+        )
         return
 
     # Degraded parse (SPEC §V.5): a truncated file puts an ERROR node where the
@@ -171,9 +186,14 @@ def _walk_tree(
                     continue
                 key = _scalar_text(parsed, key_node)
                 path = f"{prefix}.{key}" if prefix else key
-                _emit_value(parsed, child, value_node, path, parent, depth, max_depth, out)
+                _emit_value(
+                    parsed, child, value_node, path, parent, depth, max_depth, out,
+                    in_collection,
+                )
             elif child.type not in {"comment"} and child.named_child_count:
-                _walk_tree(parsed, child, prefix, parent, depth, max_depth, out)
+                _walk_tree(
+                    parsed, child, prefix, parent, depth, max_depth, out, in_collection
+                )
 
 
 def _emit_value(
@@ -185,12 +205,14 @@ def _emit_value(
     depth: int,
     max_depth: int,
     out: SchemaExtraction,
+    in_collection: bool = False,
 ) -> None:
     table = NODE_KINDS[parsed.spec.lang]
     value = _unwrap(value, table) if value is not None else None
     kind = _kind_of(parsed, value)
     is_mapping = value is not None and value.type in table["mapping"]
     is_sequence = value is not None and value.type in table["sequence"]
+    uniformity: str | None = None
 
     if is_sequence:
         elements = [
@@ -198,6 +220,7 @@ def _emit_value(
             if e is not None and e.type != "comment"
         ]
         count = len(elements)
+        uniformity = _sequence_uniformity(parsed, elements, table)
     elif is_mapping:
         count = sum(1 for c in value.named_children if c.type in table["pair"])
     else:
@@ -207,18 +230,50 @@ def _emit_value(
     # level deeper than the cap allows.
     over_depth = depth >= max_depth and (is_mapping or is_sequence)
     out.nodes.append(
-        _node(parsed, owner, path, kind, parent, value, count, over_depth)
+        _node(parsed, owner, path, kind, parent, value, count, over_depth,
+              preview=not in_collection, uniformity=uniformity)
     )
     if over_depth or value is None:
         return
 
     if is_mapping:
-        _walk_tree(parsed, value, path, path, depth + 1, max_depth, out)
+        _walk_tree(parsed, value, path, path, depth + 1, max_depth, out, in_collection)
     elif is_sequence and elements:
         # SPEC §V.11 — describe element 0's shape, never every element.
         first = elements[0]
         if first.type in table["mapping"] or first.type in table["sequence"]:
-            _walk_tree(parsed, first, f"{path}[]", path, depth + 1, max_depth, out)
+            _walk_tree(parsed, first, f"{path}[]", path, depth + 1, max_depth, out, True)
+
+
+def _sequence_uniformity(parsed: ParsedFile, elements: list[Node], table) -> str | None:
+    """Do all elements share element 0's shape? (SPEC §V.11.)
+
+    Key *names* only — values are never read, and the tree is already parsed,
+    so the check costs one pass and adds no nodes.
+    """
+    if not elements:
+        return None
+    if len(elements) > SCAN_LIMIT:
+        return UNVERIFIED
+    shapes = {_shape_signature(parsed, e, table) for e in elements}
+    return UNIFORM if len(shapes) == 1 else MIXED
+
+
+def _shape_signature(parsed: ParsedFile, node: Node, table) -> str:
+    if node.type in table["mapping"]:
+        keys = sorted(
+            _scalar_text(parsed, key)
+            for key in (
+                pair.child_by_field_name(table["key_field"])
+                for pair in node.named_children
+                if pair.type in table["pair"]
+            )
+            if key is not None
+        )
+        return "object:" + ",".join(keys)
+    if node.type in table["sequence"]:
+        return "array"
+    return _kind_of(parsed, node)
 
 
 def _unwrap(node: Node | None, table) -> Node | None:
@@ -242,13 +297,14 @@ def _walk_toml(
     depth: int,
     max_depth: int,
     out: SchemaExtraction,
+    in_collection: bool = False,
 ) -> None:
     seen_arrays: set[str] = set()
-    repeats: dict[str, int] = {}
+    repeats: dict[str, list[Node]] = {}
     for child in node.named_children:
         if child.type == "table_array_element" and child.named_child_count:
             name = _scalar_text(parsed, child.named_children[0])
-            repeats[name] = repeats.get(name, 0) + 1
+            repeats.setdefault(name, []).append(child)
     for child in node.named_children:
         if child.type == "pair":
             key_node = child.named_children[0]
@@ -257,7 +313,7 @@ def _walk_toml(
             path = f"{prefix}.{key}" if prefix else key
             out.nodes.append(
                 _node(parsed, child, path, _kind_of(parsed, value_node), parent,
-                      value_node, 0, False)
+                      value_node, 0, False, preview=not in_collection)
             )
         elif child.type in {"table", "table_array_element"}:
             key_node = child.named_children[0] if child.named_child_count else None
@@ -270,17 +326,37 @@ def _walk_toml(
                 # SPEC §V.11 — repeated [[table]] entries are one node.
                 continue
             seen_arrays.add(path)
+            siblings = repeats[name] if is_array else []
             count = (
-                repeats[name] if is_array
+                len(siblings) if is_array
                 else sum(1 for c in child.named_children if c.type == "pair")
             )
             over = depth >= max_depth
             out.nodes.append(
                 _node(parsed, child, path, "array" if is_array else "table",
-                      parent, None, count, over)
+                      parent, None, count, over,
+                      uniformity=_toml_uniformity(parsed, siblings) if is_array else None)
             )
             if not over:
-                _walk_toml(parsed, child, path, path, depth + 1, max_depth, out)
+                _walk_toml(parsed, child, path, path, depth + 1, max_depth, out,
+                           in_collection or is_array)
+
+
+def _toml_uniformity(parsed: ParsedFile, siblings: list[Node]) -> str | None:
+    """Do all `[[table]]` entries of one name declare the same keys? (§V.11.)"""
+    if not siblings:
+        return None
+    if len(siblings) > SCAN_LIMIT:
+        return UNVERIFIED
+    shapes = {
+        ",".join(sorted(
+            _scalar_text(parsed, c.named_children[0])
+            for c in element.named_children
+            if c.type == "pair" and c.named_child_count
+        ))
+        for element in siblings
+    }
+    return UNIFORM if len(shapes) == 1 else MIXED
 
 
 # --- xml ---------------------------------------------------------------------
@@ -293,6 +369,7 @@ def _walk_xml(
     depth: int,
     max_depth: int,
     out: SchemaExtraction,
+    in_collection: bool = False,
 ) -> None:
     elements = [c for c in node.named_children if c.type == "element"]
     if not elements and node.type == "document":
@@ -307,8 +384,11 @@ def _walk_xml(
         path = f"{prefix}/{name}" if prefix else name
         first = siblings[0]
         over = depth >= max_depth
+        # Repetition is a sibling count in XML — there is no array construct.
+        collapsed = in_collection or len(siblings) > 1
         out.nodes.append(
-            _node(parsed, first, path, "element", parent, None, len(siblings), over)
+            _node(parsed, first, path, "element", parent, None, len(siblings), over,
+                  uniformity=_xml_uniformity(parsed, siblings))
         )
         if over:
             continue
@@ -318,11 +398,34 @@ def _walk_xml(
             )
             out.nodes.append(
                 _node(parsed, attr_node, f"{path}@{attr_name}", "attr", path,
-                      value, 0, False)
+                      value, 0, False, preview=not collapsed)
             )
         content = next((c for c in first.named_children if c.type == "content"), None)
         if content is not None:
-            _walk_xml(parsed, content, path, path, depth + 1, max_depth, out)
+            _walk_xml(parsed, content, path, path, depth + 1, max_depth, out, collapsed)
+
+
+def _xml_uniformity(parsed: ParsedFile, siblings: list[Node]) -> str | None:
+    """Do repeated sibling elements carry the same attributes and children?"""
+    if len(siblings) < 2:
+        return None
+    if len(siblings) > SCAN_LIMIT:
+        return UNVERIFIED
+    shapes = {_xml_shape(parsed, element) for element in siblings}
+    return UNIFORM if len(shapes) == 1 else MIXED
+
+
+def _xml_shape(parsed: ParsedFile, element: Node) -> str:
+    attrs = sorted(name for name, _ in _xml_attributes(parsed, element))
+    content = next((c for c in element.named_children if c.type == "content"), None)
+    children = sorted(
+        {
+            _xml_name(parsed, c) or "?"
+            for c in (content.named_children if content is not None else [])
+            if c.type == "element"
+        }
+    )
+    return f"@{','.join(attrs)}|{','.join(children)}"
 
 
 def _xml_tag(element: Node) -> Node | None:
@@ -365,42 +468,39 @@ def _walk_csv(parsed: ParsedFile, out: SchemaExtraction) -> None:
     header, data = rows[0], rows[1:]
     header_fields = [f for f in header.named_children if f.type == "field"]
 
+    scanned = data[:SCAN_LIMIT]
     for index, field_node in enumerate(header_fields):
         name = _scalar_text(parsed, field_node)
         samples: list[Node] = []
-        for row in data[:CSV_SAMPLE_ROWS]:
+        for row in scanned:
             cells = [c for c in row.named_children if c.type == "field"]
             if index < len(cells):
                 samples.append(cells[index])
-        kind = _csv_column_kind(parsed, samples)
-        preview = _preview(parsed, samples[0]) if samples else None
+        kinds = {_infer_from_text(_scalar_text(parsed, s)) for s in samples}
+        kinds.discard("null")
+        mixed = len(kinds) > 1
         out.nodes.append(
             SchemaNode(
                 key_path=name,
-                kind=kind,
+                kind=next(iter(kinds)) if len(kinds) == 1 else "string" if mixed else "null",
                 lang=parsed.spec.lang,
                 path=str(parsed.path),
                 start_byte=field_node.start_byte,
                 end_byte=field_node.end_byte,
                 start_line=field_node.start_point[0] + 1,
                 end_line=field_node.end_point[0] + 1,
-                value_preview=preview,
+                # §G — a cell is a row value; columns never carry one.
+                value_preview=None,
                 comment=None,
                 children_count=len(data),
                 truncated_subtree=False,
                 parent=None,
+                uniformity=(
+                    UNVERIFIED if len(data) > SCAN_LIMIT
+                    else MIXED if mixed else UNIFORM
+                ),
             )
         )
-
-
-def _csv_column_kind(parsed: ParsedFile, samples: list[Node]) -> str:
-    if not samples:
-        return "null"
-    kinds = {_infer_from_text(_scalar_text(parsed, s)) for s in samples}
-    kinds.discard("null")
-    if len(kinds) == 1:
-        return kinds.pop()
-    return "string"
 
 
 # --- shared helpers ----------------------------------------------------------
@@ -414,6 +514,8 @@ def _node(
     value: Node | None,
     children_count: int,
     truncated: bool,
+    preview: bool = True,
+    uniformity: str | None = None,
 ) -> SchemaNode:
     scalar = value is not None and kind not in {"object", "array", "table", "element"}
     return SchemaNode(
@@ -425,11 +527,12 @@ def _node(
         end_byte=owner.end_byte,
         start_line=owner.start_point[0] + 1,
         end_line=owner.end_point[0] + 1,
-        value_preview=_preview(parsed, value) if scalar else None,
+        value_preview=_preview(parsed, value) if scalar and preview else None,
         comment=preceding_comment_block(owner, parsed.source),
         children_count=children_count,
         truncated_subtree=truncated,
         parent=parent,
+        uniformity=uniformity,
     )
 
 

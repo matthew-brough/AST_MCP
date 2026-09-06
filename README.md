@@ -103,7 +103,7 @@ claims to be a function or a class.
 
 | tool | use it for |
 |---|---|
-| `file_outline(path, max_depth, include_docstrings)` | the `Read` replacement — a file's shape, bodies elided |
+| `file_outline(path, max_depth, include_docstrings, mode)` | the `Read` replacement — a file's shape, bodies elided. `mode="names"` returns names, lines and counts only |
 | `get_symbol(name, path, mode)` | one definition. `name` is a symbol name, a key path (`services.web.ports`), or a heading slug |
 | `search_symbols(query, kind, lang, group, path_glob, limit)` | find things by name across the repo |
 | `get_docstrings(path \| symbols)` | docs without bodies |
@@ -176,7 +176,11 @@ Below roughly 100 lines it is about break-even against `Read`. Above that it
 pays, and `get_symbol` on a single definition pays regardless.
 
 A 5000-row CSV or JSON array costs the same as a 3-row one: homogeneous
-repeats collapse to one node carrying `children_count`.
+repeats collapse to one node carrying `children_count`. The collapse says how
+far to trust it — `uniformity` is `uniform`, `mixed`, or `unverified` (over
+5000 elements), checked across the element key sets. No value from inside a
+collection comes back with it, so asking a 1.3 MB `ban_list.json` for its
+record shape returns the shape and none of the records.
 
 ### Measure it on your own repo
 
