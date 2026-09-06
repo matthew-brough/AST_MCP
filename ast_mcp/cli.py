@@ -29,6 +29,10 @@ MCP_SERVER_KEY = "ast-mcp"
 
 SUBCOMMANDS = ("serve", "init", "index", "status", "languages")
 
+#: The MCP key CCE registers itself under. Read for the `--with-cce` hint and
+#: nothing else — this tool never writes it and does not require it to exist.
+CCE_SERVER_KEY = "context-engine"
+
 GITIGNORE_ENTRY = f"{DB_DIRNAME}/"
 
 _COUNT_TABLES = ("files", "symbols", "imports", "schema_nodes", "doc_nodes")
@@ -50,7 +54,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     root = resolve_root(args.root)
     # The server resolves its own root from the environment, so a `--root`
     # passed here has to reach it the same way an operator-set one would.
+    # `--with-cce` travels by the same path: `main` builds its instruction
+    # string at import time, so the flag has to land before that import.
     os.environ["AST_MCP_ROOT"] = str(root)
+    if args.with_cce:
+        os.environ["AST_MCP_WITH_CCE"] = "1"
     from ast_mcp.main import mcp
 
     mcp.run(transport="stdio")
@@ -257,23 +265,30 @@ def _is_ephemeral(executable: Path) -> bool:
     return False
 
 
-def server_invocation(override: str | None = None) -> tuple[str, list[str]]:
+def server_invocation(
+    override: str | None = None, *, with_cce: bool = False
+) -> tuple[str, list[str]]:
     """How `.mcp.json` should spawn the server.
 
     Prefers the installed console script — a `uv tool install` puts `ast-mcp`
     on PATH and that is the cheapest launch. Falls back to `uvx`, which needs
     no install at all. Neither form hardcodes an absolute path, so the written
     stanza stays committable and portable across machines.
+
+    `with_cce` appends `--with-cce` so the opt-in survives in the file Claude
+    Code launches from — a flag that only lived on the `init` command line
+    would be gone by the first session.
     """
+    extra = ["--with-cce"] if with_cce else []
     if override:
         parts = shlex.split(override)
         if not parts:
             raise ValueError("--command is empty")
-        return parts[0], parts[1:]
+        return parts[0], [*parts[1:], *extra]
     found = shutil.which(MCP_SERVER_KEY)
     if found and not _is_ephemeral(Path(found)):
-        return MCP_SERVER_KEY, ["serve"]
-    return "uvx", ["ast-mcp", "serve"]
+        return MCP_SERVER_KEY, ["serve", *extra]
+    return "uvx", ["ast-mcp", "serve", *extra]
 
 
 def _update_gitignore(root: Path, *, dry_run: bool) -> str | None:
@@ -299,7 +314,7 @@ def _update_gitignore(root: Path, *, dry_run: bool) -> str | None:
 def cmd_init(args: argparse.Namespace) -> int:
     root = resolve_root(args.root)
     try:
-        command, command_args = server_invocation(args.command)
+        command, command_args = server_invocation(args.command, with_cce=args.with_cce)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
@@ -347,6 +362,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     others = [name for name in servers if name != MCP_SERVER_KEY]
     if others:
         print(f"  left alone: {', '.join(sorted(others))}")
+    # Detection hints, it never decides. Silently changing what the server
+    # tells the agent because a sibling key exists is exactly the surprise
+    # `init` avoids everywhere else.
+    if CCE_SERVER_KEY in servers and not args.with_cce:
+        print(f"  `{CCE_SERVER_KEY}` is registered here — "
+              "`ast-mcp init --with-cce` adds the routing guidance for both")
 
     note = _update_gitignore(root, dry_run=args.dry_run)
     if note:
@@ -390,6 +411,14 @@ def cmd_languages(args: argparse.Namespace) -> int:
 # --- wiring ------------------------------------------------------------------
 
 
+def _add_with_cce(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--with-cce", action="store_true",
+        help="tell the agent how to split work with CCE `context_search` "
+             "(default: standalone, no other retriever assumed)",
+    )
+
+
 def _add_root(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--root", default=None,
@@ -407,6 +436,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = subparsers.add_parser("serve", help="run the MCP server over stdio")
     _add_root(serve)
+    _add_with_cce(serve)
     serve.set_defaults(func=cmd_serve)
 
     init = subparsers.add_parser(
@@ -417,6 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--command", default=None,
         help="override how .mcp.json launches the server, e.g. \"uv run ast-mcp serve\"",
     )
+    _add_with_cce(init)
     init.add_argument("--no-index", action="store_true", help="register only, skip indexing")
     init.add_argument("--dry-run", action="store_true", help="print changes, write nothing")
     init.set_defaults(func=cmd_init)

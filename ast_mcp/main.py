@@ -30,11 +30,35 @@ definition you need. search_symbols finds things by name across the repo.
 ast_query is the escape hatch when the typed tools do not fit.
 """
 
+#: Appended to ``INSTRUCTIONS`` when the operator opts in with `serve
+#: --with-cce` (or ``AST_MCP_WITH_CCE``). The default is standalone: nothing
+#: above assumes a semantic retriever is registered, and nothing above defers
+#: to one. This paragraph is the only place CCE is named.
+CCE_INSTRUCTIONS = """
+A semantic retriever (CCE `context_search`) is registered alongside this
+server. Route on what you can name: a symbol, key path or heading is these
+tools; behaviour you can only describe is `context_search`. Its hits carry
+names — hand those to get_symbol for the exact definition.
+"""
+
+
+def with_cce() -> bool:
+    """Whether to advertise the CCE division of labour (SPEC §I.config)."""
+    return os.environ.get("AST_MCP_WITH_CCE", "").strip().lower() not in (
+        "", "0", "false", "no",
+    )
+
+
+def instructions() -> str:
+    """Server instructions — standalone by default, CCE-aware on request."""
+    return INSTRUCTIONS + CCE_INSTRUCTIONS if with_cce() else INSTRUCTIONS
+
+
 mcp = MCPServer(
     name="ast-mcp",
     title="AST MCP",
     version=__version__,
-    instructions=INSTRUCTIONS,
+    instructions=instructions(),
 )
 
 

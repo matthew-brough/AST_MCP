@@ -1,9 +1,12 @@
 """SPEC §T.8 — the server exposes exactly the six tools from §I.tools."""
 
 import asyncio
+import os
 import unittest
 
-from ast_mcp.main import mcp
+from unittest import mock
+
+from ast_mcp.main import CCE_INSTRUCTIONS, INSTRUCTIONS, instructions, mcp
 
 EXPECTED = {
     "file_outline",
@@ -50,6 +53,29 @@ class TestServer(unittest.TestCase):
 
     def test_instructions_tell_the_agent_about_profiles(self):
         self.assertIn("profile", mcp._lowlevel_server.instructions)
+
+
+class TestInstructionsAreStandaloneByDefault(unittest.TestCase):
+    """The server assumes no sibling retriever unless asked to (SPEC §I.config)."""
+
+    def test_default_instructions_name_no_other_tool(self):
+        with mock.patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("AST_MCP_WITH_CCE", None)
+            text = instructions()
+        self.assertEqual(text, INSTRUCTIONS)
+        self.assertNotIn("cce", text.lower())
+        self.assertNotIn("context_search", text)
+
+    def test_opt_in_appends_the_routing_paragraph(self):
+        with mock.patch.dict("os.environ", {"AST_MCP_WITH_CCE": "1"}):
+            text = instructions()
+        self.assertEqual(text, INSTRUCTIONS + CCE_INSTRUCTIONS)
+        self.assertIn("context_search", text)
+
+    def test_falsey_values_do_not_opt_in(self):
+        for value in ("", "0", "false", "no", "  "):
+            with mock.patch.dict("os.environ", {"AST_MCP_WITH_CCE": value}):
+                self.assertEqual(instructions(), INSTRUCTIONS)
 
 
 if __name__ == "__main__":

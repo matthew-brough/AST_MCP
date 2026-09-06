@@ -122,6 +122,20 @@ class TestServerInvocation(unittest.TestCase):
         with self.assertRaises(ValueError):
             server_invocation("   ")
 
+    def test_with_cce_is_recorded_in_the_stanza(self):
+        """The opt-in has to survive into the file Claude Code launches from."""
+        with mock.patch("ast_mcp.cli.shutil.which", return_value=None):
+            self.assertEqual(
+                server_invocation(with_cce=True),
+                ("uvx", ["ast-mcp", "serve", "--with-cce"]),
+            )
+
+    def test_with_cce_appends_to_an_override(self):
+        self.assertEqual(
+            server_invocation("uv run ast-mcp serve", with_cce=True),
+            ("uv", ["run", "ast-mcp", "serve", "--with-cce"]),
+        )
+
     def test_no_absolute_paths_in_default_stanza(self):
         """A committed .mcp.json has to work on someone else's machine."""
         command, args = server_invocation()
@@ -149,6 +163,39 @@ class TestInit(CLITestBase):
         self.assertEqual(data["mcpServers"]["context-engine"]["command"], "cce")
         self.assertEqual(data["otherKey"], {"keep": True})
         self.assertIn("context-engine", out)
+
+    def test_default_stanza_is_standalone(self):
+        self.run_cli("init", "--root", str(self.root), "--no-index")
+        stanza = self.mcp_json()["mcpServers"][MCP_SERVER_KEY]
+        self.assertNotIn("--with-cce", stanza["args"])
+
+    def test_with_cce_opts_the_server_in(self):
+        code, _, _ = self.run_cli(
+            "init", "--root", str(self.root), "--no-index", "--with-cce"
+        )
+        self.assertEqual(code, 0)
+        stanza = self.mcp_json()["mcpServers"][MCP_SERVER_KEY]
+        self.assertEqual(stanza["args"][-1], "--with-cce")
+
+    def test_registered_cce_only_hints(self):
+        """Detection suggests the flag; it never flips the mode by itself."""
+        (self.root / ".mcp.json").write_text(json.dumps({
+            "mcpServers": {"context-engine": {"command": "cce", "args": ["serve"]}},
+        }), encoding="utf-8")
+        code, out, _ = self.run_cli("init", "--root", str(self.root), "--no-index")
+        self.assertEqual(code, 0)
+        self.assertIn("--with-cce", out)
+        stanza = self.mcp_json()["mcpServers"][MCP_SERVER_KEY]
+        self.assertNotIn("--with-cce", stanza["args"])
+
+    def test_hint_is_silent_once_opted_in(self):
+        (self.root / ".mcp.json").write_text(json.dumps({
+            "mcpServers": {"context-engine": {"command": "cce", "args": ["serve"]}},
+        }), encoding="utf-8")
+        _, out, _ = self.run_cli(
+            "init", "--root", str(self.root), "--no-index", "--with-cce"
+        )
+        self.assertNotIn("adds the routing guidance", out)
 
     def test_rerun_is_idempotent(self):
         self.run_cli("init", "--root", str(self.root), "--no-index")
