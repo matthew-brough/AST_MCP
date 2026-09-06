@@ -1,0 +1,12 @@
+@mixin flex-center($gap) {
+  display: flex;
+  gap: $gap;
+}
+
+@function double($n) {
+  @return $n * 2;
+}
+
+.card {
+  color: red;
+}

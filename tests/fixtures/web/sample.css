@@ -1,0 +1,14 @@
+@import "reset.css";
+
+/* Primary button. */
+.btn, #main .btn:hover {
+  color: red;
+}
+
+@media screen {
+  .btn { color: blue; }
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+}

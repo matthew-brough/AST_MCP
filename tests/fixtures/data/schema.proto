@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+// A user record.
+message User {
+  int32 id = 1;
+  string email = 2;
+}
+
+enum Role {
+  ADMIN = 0;
+}
+
+service UserService {
+  rpc GetUser (User) returns (User);
+}

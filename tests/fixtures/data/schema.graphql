@@ -1,0 +1,22 @@
+type Query {
+  user(id: ID!): User
+}
+
+type User {
+  id: ID!
+  email: String
+}
+
+input UserFilter {
+  email: String
+}
+
+interface Node {
+  id: ID!
+}
+
+enum Role {
+  ADMIN
+}
+
+scalar DateTime
