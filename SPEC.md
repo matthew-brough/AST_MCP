@@ -29,10 +29,17 @@ imports, byte rangbefes. Persists to SQLite. Exposes 6 read-only MCP tools.
 Target: file outline ≈ N/10 tokens for N-line file. `get_symbol` costs the
 symbol's own length, nothing more.
 
-**Complement to CCE, not replacement.** CCE `context_search` = fuzzy semantic
-retrieval over embedded chunks; good for "how does auth work". AST_MCP =
-exact structural retrieval by name/kind/range; good for "show me
-`TokenStore.refresh`". Different failure modes. Both stay.
+**Standalone by default.** The server assumes nothing else is registered: its
+instructions name no other tool and no response defers to one. A repo with
+AST_MCP alone is a supported configuration, not a degraded one.
+
+**CCE is an opt-in peer, not a dependency.** Where a semantic retriever *is*
+present — CCE `context_search`, fuzzy retrieval over embedded chunks, good for
+"how does auth work" — `--with-cce` (§I.config) appends one paragraph telling
+the agent how to split the work: exact structural retrieval by name/kind/range
+here, described-but-unnamed behaviour there. Different failure modes, and the
+routing rule ships only when asked for. `init` may *hint* that CCE is
+registered; it never enables the mode on its own.
 
 Read-only v1. Server never mutates user files. Agent still uses Edit/Write.
 
@@ -663,6 +670,14 @@ No absolute paths — the file is meant to be committed and to work on a
 teammate's machine. When `ast-mcp` is not permanently on `PATH` the stanza
 becomes `uvx ast-mcp serve` instead.
 
+Peer mode: `--with-cce` on `serve` (or `AST_MCP_WITH_CCE` set to anything
+other than empty / `0` / `false` / `no`) appends `main.CCE_INSTRUCTIONS` to the
+server instructions — the only place in this project that names CCE at
+runtime. `init --with-cce` records the flag in the stanza args, because an
+opt-in that lived only on the `init` command line would be gone by the first
+session. Default is off; `init` prints a hint when it sees a `context-engine`
+key in `.mcp.json` and changes nothing else.
+
 Entry: `mcp.run(transport="stdio")`.
 
 Packaging: hatchling, `requires-python >= 3.11`, version read from
@@ -679,8 +694,8 @@ Five subcommands. Bare `ast-mcp`, or `ast-mcp` followed only by flags, means
 
 | command | writes | does |
 |---|---|---|
-| `serve [--root]` | index only | stdio MCP server. what `.mcp.json` launches |
-| `init [--root] [--command CMD] [--no-index] [--dry-run]` | `.mcp.json`, `.gitignore`, index | register + ignore + build |
+| `serve [--root] [--with-cce]` | index only | stdio MCP server. what `.mcp.json` launches |
+| `init [--root] [--command CMD] [--with-cce] [--no-index] [--dry-run]` | `.mcp.json`, `.gitignore`, index | register + ignore + build |
 | `index [--root] [--rebuild] [--verbose] [--quiet]` | index only | `refresh_all`, then counts + skips |
 | `status [--root] [--json]` | nothing | counts, size, age, registration |
 | `languages [--group G] [--json]` | nothing | the §I.langs registry |
@@ -700,6 +715,11 @@ fallback is `uvx`.
 
 `status` on an unindexed root reports that and creates no database. Reading
 status must not be the thing that writes one.
+
+`--with-cce` is the only knob that changes what the agent is told, and it is
+off unless typed. Detecting a sibling retriever and silently rewriting the
+server's instructions would be the same class of surprise as rewriting a
+sibling `.mcp.json` key, which `init` refuses to do.
 
 ---
 
@@ -761,7 +781,7 @@ stray `import httpx2` deleted.
 | T7 | x | `tools.py` + `render.py` — 6 tools, **profile dispatch** (§V.12), budget trim, error payloads | `test_tools.py`: each tool × each profile, incl. ambiguity (§V.9) + bad query (§V.5) |
 | T8 | x | `main.py` — MCPServer wiring, stdio, `.mcp.json` entry | server starts, `tools/list` returns 6 |
 | T9 | x | tests — core fixtures, golden outlines, staleness, budget | full suite green |
-| T10 | x | `README.md` + agent usage guidance (AST_MCP vs CCE `context_search`, and which profile each group gets) | doc exists, names both, documents 4 profiles |
+| T10 | x | `README.md` + agent usage guidance (standalone use, the optional CCE `context_search` split, and which profile each group gets) | doc exists, documents 4 profiles, CCE section reads as optional |
 | T11 | x | probe language-pack for all 20 non-core grammars under ts 0.26 | every name loads + parses w/o `has_error` |
 | T12 | x | extend registry to 26 rows: `LangSpec` w/ `group` + `profile`, filename matching for Dockerfile | `test_languages.py`: all 26 resolve, every `source` loads, unknown ext → `None` |
 | T13 | x | `queries/defs/*.scm` ×12 — ruby, perl, r, bash, zsh, css, scss, sql, graphql, proto, terraform, dockerfile | each compiles via `Query(lang, src)`; golden symbol list per fixture |
@@ -770,6 +790,7 @@ stray `import httpx2` deleted.
 | T16 | x | `cli.py` — 5 subcommands, argv routing, `.mcp.json` merge, `.gitignore` entry, ephemeral-launcher detection | `test_cli.py`: bare argv -> serve, sibling servers survive, unparseable `.mcp.json` refused, rerun idempotent, `uvx` launcher not recorded |
 | T17 | x | packaging — hatchling, console script `ast-mcp`, py3.11 floor, wheel carries every `.scm`, LICENSE | `uv build` then handshake the wheel: `tools/list` returns 6, `file_outline` extracts |
 | T18 | x | CI + release workflows — test matrix 3.11–3.14, wheel query-file gate, tag/version check, PyPI trusted publishing | workflows present; release job refuses a tag that disagrees with `__version__` |
+| T19 | x | standalone-by-default instructions + `--with-cce` opt-in on `serve`/`init`, `init` hint on a registered `context-engine` key | `test_server.py`: default instructions name no other tool, flag appends the paragraph; `test_cli.py`: flag lands in the stanza, detection hints without enabling |
 
 ### T1 gate script
 

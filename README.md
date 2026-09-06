@@ -109,20 +109,32 @@ Nothing is dropped silently.
 `get_symbol` **never guesses**. A name matching several symbols returns
 `ambiguous: true` with candidates; pass `path` or a qualified name to resolve.
 
-## When to use this vs CCE `context_search`
+## Alongside a semantic retriever (optional)
 
-They answer different questions and both stay.
+AST_MCP stands alone. Nothing it tells the agent assumes another retrieval
+tool is registered, and a repo running only this server is a supported setup.
+
+If you also run CCE, `--with-cce` adds one paragraph to the server's
+instructions so the agent knows how to split the work:
+
+```bash
+ast-mcp init --with-cce      # records the flag in .mcp.json
+```
 
 - **`context_search` (CCE)** — fuzzy semantic retrieval over embedded chunks.
-  Use for *"how does auth work?"*, *"where is rate limiting handled?"*, and
-  anything where you know the concept but not the name.
-- **AST_MCP** — exact structural retrieval by name, kind and range. Use for
+  For *"how does auth work?"*, *"where is rate limiting handled?"* — you know
+  the concept but not the name.
+- **AST_MCP** — exact structural retrieval by name, kind and range. For
   *"show me `TokenStore.refresh`"*, *"what's in this config file?"*, *"list
-  every `CREATE TABLE` in the repo"*, and anything where you know the name but
-  not the location.
+  every `CREATE TABLE` in the repo"* — you know the name but not the location.
 
 Rough rule: describing behaviour → `context_search`. Naming a thing →
-AST_MCP.
+AST_MCP. A `context_search` hit hands you a name; `get_symbol` turns it into
+the exact definition.
+
+Without the flag nothing changes and no CCE mention reaches the agent. Plain
+`ast-mcp init` prints a hint if it notices `context-engine` in `.mcp.json`;
+it never switches modes for you.
 
 ## What it costs
 
