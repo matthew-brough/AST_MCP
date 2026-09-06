@@ -1,0 +1,4 @@
+# Byte-for-byte fixtures: §V.2 makes bytes the source of truth, so the
+# checkout must not rewrite line endings on any platform.
+tests/fixtures/** -text
+*.scm -text

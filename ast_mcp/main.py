@@ -7,8 +7,8 @@ long-lived process never serves a stale answer (SPEC §V.3).
 
 from __future__ import annotations
 
-import argparse
 import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -128,14 +128,12 @@ def ast_query(
     return tools.ast_query(get_index(), path, query, captures, max_tokens)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(prog="ast-mcp", description="AST MCP server")
-    parser.add_argument("--root", default=None, help="repository root to index")
-    args = parser.parse_args()
-    if args.root:
-        os.environ["AST_MCP_ROOT"] = str(Path(args.root).resolve())
-    mcp.run(transport="stdio")
+def main() -> int:
+    """Kept so ``python -m ast_mcp.main`` still works; the CLI owns argv now."""
+    from ast_mcp.cli import main as cli_main
+
+    return cli_main()
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -33,8 +33,13 @@ class TestCache(ParserTestBase):
         """SPEC §V.3 — a changed file is reparsed before it is answered from."""
         p = self.write("a.py", b"def f():\n    pass\n")
         first, _ = parser.parse_file(p)
-        os.utime(p, ns=(0, 0))
         p.write_bytes(b"def g():\n    pass\n")
+        # The edit keeps the size, so mtime is the only signal — and Windows
+        # ticks its clock about every 16ms, which is long enough for both
+        # writes to land on one timestamp. Stamp it so this measures
+        # invalidation rather than the host's timer resolution.
+        moved = first.mtime_ns + 10**9
+        os.utime(p, ns=(moved, moved))
         second, _ = parser.parse_file(p)
         self.assertIsNot(first, second)
         self.assertIn(b"def g", second.source)

@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.13"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          # One key per matrix leg — the parallel jobs otherwise race to
+          # reserve the same cache and all but one lose it.
+          cache-suffix: ${{ matrix.os }}-${{ matrix.python-version }}
+
+      - name: Run the suite
+        run: uv run --python ${{ matrix.python-version }} --group dev pytest -q
+
+  package:
+    # The queries live outside the .py files (SPEC §V.8), so "it imports" is not
+    # enough — the built wheel has to carry every .scm or extraction silently
+    # returns nothing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Wheel ships the tree-sitter queries
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          queries = [n for n in names if n.endswith(".scm")]
+          expected = len(glob.glob("ast_mcp/queries/**/*.scm", recursive=True))
+          print(f"{wheel}: {len(queries)}/{expected} query files")
+          if len(queries) != expected or expected == 0:
+              sys.exit(f"wheel is missing query files: {sorted(queries)}")
+          PY
+
+      - name: Installed console script serves over stdio
+        run: |
+          uv tool install ./dist/*.whl
+          ast-mcp --version
+          ast-mcp languages --group core
+          mkdir -p /tmp/probe/src
+          printf 'def hello(name):\n    return name\n' > /tmp/probe/src/app.py
+          ast-mcp init --root /tmp/probe
+          ast-mcp status --root /tmp/probe --json
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist
+          path: dist/

@@ -11,7 +11,6 @@ wheels/
 
 .claude
 CLAUDE.md
-SPEC.md
 .mcp.json
 
 # AST_MCP symbol index
