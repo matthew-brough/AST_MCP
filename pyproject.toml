@@ -1,9 +1,26 @@
 [project]
 name = "ast-mcp"
-version = "0.1.0"
-description = "Add your description here"
+dynamic = ["version"]
+description = "Structural code retrieval over MCP — tree-sitter symbols instead of whole files"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "artemOP", email = "matthew.brough123890@gmail.com" }]
+keywords = ["mcp", "tree-sitter", "ast", "code-search", "claude", "llm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+]
 dependencies = [
     "mcp[cli]>=2.1.1",
     "tree-sitter>=0.26.0",
@@ -15,5 +32,26 @@ dependencies = [
     "tree-sitter-typescript>=0.23.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/matthew-brough/AST_MCP"
+Repository = "https://github.com/matthew-brough/AST_MCP"
+Issues = "https://github.com/matthew-brough/AST_MCP/issues"
+
+[project.scripts]
+ast-mcp = "ast_mcp.cli:main"
+
 [dependency-groups]
-dev = []
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "ast_mcp/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ast_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/ast_mcp", "/tests", "/README.md", "/LICENSE"]
