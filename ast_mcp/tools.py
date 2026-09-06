@@ -63,7 +63,9 @@ def file_outline(
     rows = index.rows_for_file(table, record.id, order)
 
     items = [_row_to_item(r, record.profile, include_docstrings) for r in rows]
-    items = [i for i in items if _depth_of(i, items, id_field) <= depth]
+    items = [
+        item for item, own in zip(items, _depths(items, id_field)) if own <= depth
+    ]
 
     payload = envelope(
         path=record.path,
@@ -415,16 +417,22 @@ def _row_to_item(row, profile: str, include_docstrings: bool) -> dict:
     }
 
 
-def _depth_of(item: dict, items: list[dict], id_field: str) -> int:
-    """Nesting depth, 1-based, following the parent chain within this file."""
-    by_id = {i[id_field]: i for i in items}
-    depth, current, seen = 1, item, 0
-    while current.get("parent") is not None and seen < 64:
-        parent = by_id.get(current["parent"])
-        if parent is None:
-            break
-        depth, current, seen = depth + 1, parent, seen + 1
-    return depth
+def _depths(items: list[dict], id_field: str) -> list[int]:
+    """Nesting depth per item, 1-based, within this file.
+
+    Resolved by position rather than by name, because ids are not unique —
+    a Lua file can register the same event name twice. Rows arrive
+    container-first, so an item's parent is the nearest preceding item
+    carrying that id.
+    """
+    latest: dict[str, int] = {}
+    depths: list[int] = []
+    for position, item in enumerate(items):
+        parent = item.get("parent")
+        parent_position = latest.get(str(parent)) if parent is not None else None
+        depths.append(1 if parent_position is None else depths[parent_position] + 1)
+        latest[str(item[id_field])] = position
+    return depths
 
 
 def _doc_entry(row, profile: str, path: str) -> dict:

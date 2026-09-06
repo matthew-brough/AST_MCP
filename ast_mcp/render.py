@@ -57,19 +57,20 @@ def nest(items: list[dict], id_field: str, parent_field: str) -> list[dict]:
     An item whose parent was trimmed away stays at the root rather than
     vanishing; §V.1 forbids dropping content without saying so.
     """
-    by_id: dict[str, dict] = {}
     roots: list[dict] = []
+    latest: dict[str, dict] = {}
     for item in items:
         node = {k: v for k, v in item.items() if k != parent_field}
-        by_id[str(item[id_field])] = node
-    for item in items:
-        node = by_id[str(item[id_field])]
         parent_id = item.get(parent_field)
-        parent = by_id.get(str(parent_id)) if parent_id is not None else None
+        parent = latest.get(str(parent_id)) if parent_id is not None else None
         if parent is None or parent is node:
             roots.append(node)
         else:
             parent.setdefault("children", []).append(node)
+        # Ids are not unique: one Lua file registers the same event name
+        # twice. Rows arrive container-first, so the nearest preceding node
+        # with that id is the real container.
+        latest[str(item[id_field])] = node
     return roots
 
 
