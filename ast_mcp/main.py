@@ -64,15 +64,19 @@ def file_outline(
 def get_symbol(
     name: str,
     path: str | None = None,
+    line: int | None = None,
     mode: str = "source",
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
-    """Fetch one definition by name, key path, or heading slug.
+    """Fetch definitions by name, key path, or heading slug.
 
     mode: "source" (default) returns the body, "signature" and "doc" omit it.
-    An ambiguous name returns candidates rather than guessing.
+    A name matching several different symbols returns candidates rather than
+    guessing. A name matching several definitions of the same thing — many Lua
+    listeners on one event — returns all of them in "symbols".
+    line: pick one definition by the start_line a candidate reported.
     """
-    return tools.get_symbol(get_index(), name, path, mode, max_tokens)
+    return tools.get_symbol(get_index(), name, path, line, mode, max_tokens)
 
 
 @mcp.tool()

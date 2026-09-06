@@ -87,10 +87,14 @@ def get_symbol(
     index: Index,
     name: str,
     path: str | None = None,
+    line: int | None = None,
     mode: str = "source",
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict:
-    """One definition, by name or by key path. Ambiguity is reported (§V.9)."""
+    """Definitions by name or key path.
+
+    Ambiguity is reported, multiplicity is answered (§V.9).
+    """
     if mode not in {"source", "signature", "doc"}:
         return with_errors(
             envelope(found=False, ambiguous=False),
@@ -109,62 +113,95 @@ def get_symbol(
         errors.extend(index.refresh_all())
 
     matches = _candidates(index, name, scope)
+    if line is not None:
+        # The `start_line` a candidate reported. Two handlers bound to one
+        # event name in one file are identical under `path`, so a line is the
+        # only address that separates them.
+        matches = [r for r in matches if r["start_line"] == line]
     payload = envelope(found=False, ambiguous=False)
 
     if not matches:
         with_errors(payload, [*errors, Error("not_found", scope, name)])
         return payload
 
-    if len(matches) > 1:
+    # Grouped on the bare name, not the qualified one: a listener nested inside
+    # a function carries its parent as a prefix, and that is a fact about where
+    # it sits, not about what the caller asked for.
+    if len({(r["name"], r["kind"]) for r in matches}) > 1:
         # SPEC §V.9 — never guess which one they meant.
         payload["ambiguous"] = True
-        candidates = [
-            {
-                "qualified_name": r["qualified_name"],
-                "kind": r["kind"],
-                "profile": r["profile"],
-                "path": r["path"],
-                "start_line": r["start_line"],
-            }
-            for r in matches
-        ]
+        candidates = [_candidate_fields(r) for r in matches]
         kept, truncated = fit(candidates, max_tokens, estimate_tokens(payload))
         payload["candidates"] = kept
         payload["truncated"] = truncated
         with_errors(payload, errors)
         return narrow_hint(payload, "path, or a fully qualified name")
 
-    row = matches[0]
-    parsed, _record, file_errors, failure = _resolve(index, row["path"])
-    if failure is not None:
-        return failure
-    errors.extend(file_errors)
+    # Past this point every match is the same (qualified_name, kind): not an
+    # ambiguity but N real definitions. Lua binds many listeners to one event
+    # name and each is a genuine answer, so all of them come back — dropping
+    # the siblings silently would be its own confidently-wrong slice (§V.9).
+    parsed_by_path: dict[str, ParsedFile] = {}
+    for row in matches:
+        if row["path"] in parsed_by_path:
+            continue
+        parsed, _record, file_errors, failure = _resolve(index, row["path"])
+        if failure is not None:
+            return failure
+        errors.extend(file_errors)
+        parsed_by_path[row["path"]] = parsed
 
-    symbol: dict[str, Any] = {
-        "name": row["name"],
-        "qualified_name": row["qualified_name"],
-        "kind": row["kind"],
-        "lang": row["lang"],
-        "profile": row["profile"],
-        "group": row["grp"],
-        "path": row["path"],
-        "start_line": row["start_line"],
-        "end_line": row["end_line"],
-        "start_byte": row["start_byte"],
-        "end_byte": row["end_byte"],
-        "signature": row["signature"],
-        "docstring": row["docstring"],
-    }
     payload["found"] = True
 
-    if mode == "source":
-        source = parsed.slice(row["start_byte"], row["end_byte"])
-        budget = max_tokens - estimate_tokens({**payload, "symbol": symbol})
-        symbol["source"], payload["truncated"] = clip(source, budget)
+    if len(matches) == 1:
+        row = matches[0]
+        symbol = _symbol_fields(row)
+        if mode == "source":
+            parsed = parsed_by_path[row["path"]]
+            source = parsed.slice(row["start_byte"], row["end_byte"])
+            budget = max_tokens - estimate_tokens({**payload, "symbol": symbol})
+            symbol["source"], payload["truncated"] = clip(source, budget)
+        payload["symbol"] = symbol
+        with_errors(payload, errors)
+        return narrow_hint(payload, 'mode="signature"')
 
-    payload["symbol"] = symbol
+    payload["total_matches"] = len(matches)
+    # An even split, so one long definition cannot starve its siblings.
+    share = max(1, max_tokens // (len(matches) + 1))
+    clipped = False
+    entries: list[dict] = []
+    for row in matches:
+        entry = _symbol_fields(row)
+        if mode == "source":
+            parsed = parsed_by_path[row["path"]]
+            source = parsed.slice(row["start_byte"], row["end_byte"])
+            entry["source"], cut = clip(source, share - estimate_tokens(entry))
+            clipped = clipped or cut
+        entries.append(entry)
+
+    # Whatever does not fit as a body still gets named, so nothing vanishes
+    # quietly — which means the naming has to be paid for out of the same
+    # budget (§V.1). Take the most bodies that leave room for the rest.
+    overflow = [_candidate_fields(r) for r in matches]
+    body_cost = [estimate_tokens(e) for e in entries]
+    name_cost = [estimate_tokens(c) for c in overflow]
+    overhead = estimate_tokens(payload)
+    kept_count = 0
+    for count in range(len(entries), -1, -1):
+        spent = overhead + sum(body_cost[:count]) + sum(name_cost[count:])
+        if spent <= max_tokens:
+            kept_count = count
+            break
+
+    payload["symbols"] = entries[:kept_count]
+    payload["truncated"] = clipped or kept_count < len(entries)
+    if kept_count < len(entries):
+        spent = overhead + sum(body_cost[:kept_count])
+        named, dropped = fit(overflow[kept_count:], max_tokens, spent)
+        payload["candidates"] = named
+        payload["truncated"] = payload["truncated"] or dropped
     with_errors(payload, errors)
-    return narrow_hint(payload, 'mode="signature"')
+    return narrow_hint(payload, 'line, or mode="signature"')
 
 
 # --- tool 3: search_symbols --------------------------------------------------
@@ -375,6 +412,39 @@ def _resolve(index: Index, path: str):
             envelope(path=relative, profile=None, group=None), errors
         )
     return parsed, record, errors, None
+
+
+def _symbol_fields(row) -> dict[str, Any]:
+    """The full description of one definition, body excluded."""
+    return {
+        "name": row["name"],
+        "qualified_name": row["qualified_name"],
+        "kind": row["kind"],
+        "lang": row["lang"],
+        "profile": row["profile"],
+        "group": row["grp"],
+        "path": row["path"],
+        "start_line": row["start_line"],
+        "end_line": row["end_line"],
+        "start_byte": row["start_byte"],
+        "end_byte": row["end_byte"],
+        "signature": row["signature"],
+        "docstring": row["docstring"],
+    }
+
+
+def _candidate_fields(row) -> dict[str, Any]:
+    """The compact form: enough to address a definition, nothing more.
+
+    ``start_line`` is the address — it is what ``get_symbol(line=...)`` takes.
+    """
+    return {
+        "qualified_name": row["qualified_name"],
+        "kind": row["kind"],
+        "profile": row["profile"],
+        "path": row["path"],
+        "start_line": row["start_line"],
+    }
 
 
 def _row_to_item(row, profile: str, include_docstrings: bool) -> dict:

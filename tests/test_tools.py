@@ -110,6 +110,34 @@ class TestGetSymbol(ToolTestBase):
         self.assertIn("Widget.render", names)
         self.assertGreater(len(names), 1)
 
+    def test_repeated_definitions_come_back_whole(self):
+        """SPEC §V.9 — two listeners on one event are N answers, not ambiguity."""
+        result = tools.get_symbol(self.index, "sample:ping")
+        self.assertTrue(result["found"])
+        self.assertFalse(result["ambiguous"])
+        self.assertNotIn("symbol", result)
+        self.assertEqual(result["total_matches"], 2)
+        self.assertEqual(len(result["symbols"]), 2)
+        lines = sorted(s["start_line"] for s in result["symbols"])
+        self.assertEqual(len(set(lines)), 2)
+        for entry in result["symbols"]:
+            self.assertEqual(entry["kind"], "handler")
+            self.assertTrue(entry["source"].startswith("RegisterNetEvent"))
+
+    def test_line_addresses_one_of_several_identical_names(self):
+        """`path` cannot separate two handlers in one file; `line` can."""
+        both = tools.get_symbol(self.index, "sample:ping")
+        wanted = max(s["start_line"] for s in both["symbols"])
+        result = tools.get_symbol(self.index, "sample:ping", line=wanted)
+        self.assertTrue(result["found"])
+        self.assertNotIn("symbols", result)
+        self.assertEqual(result["symbol"]["start_line"], wanted)
+
+    def test_line_that_matches_nothing_is_not_found(self):
+        result = tools.get_symbol(self.index, "sample:ping", line=9999)
+        self.assertFalse(result["found"])
+        self.assertEqual([e["code"] for e in result["errors"]], ["not_found"])
+
     def test_path_disambiguates(self):
         result = tools.get_symbol(self.index, "render", path="src/core/sample.py")
         self.assertTrue(result["found"])
