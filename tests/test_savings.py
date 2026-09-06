@@ -20,11 +20,11 @@ FIXTURES = Path(__file__).parent / "fixtures"
 class SavingsTestBase(unittest.TestCase):
     def setUp(self):
         parser.cache_clear()
-        savings._cached.cache_clear()
+        savings.close_all()
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
-        self.addCleanup(savings._cached.cache_clear)
+        self.addCleanup(savings.close_all)
         shutil.copytree(FIXTURES / "core", self.root / "src")
         self.index = Index(self.root)
         self.addCleanup(self.index.close)
@@ -98,8 +98,8 @@ class TestServerRecordsWhatItServes(SavingsTestBase):
     def test_file_outline_through_the_server_is_recorded(self):
         from ast_mcp import main as server
 
-        server.get_index.cache_clear()
-        self.addCleanup(server.get_index.cache_clear)
+        server.close_index()
+        self.addCleanup(server.close_index)
         with mock.patch.dict("os.environ", {"AST_MCP_ROOT": str(self.root)}):
             payload = server.file_outline("src/sample.py")
         self.assertEqual(payload["path"], "src/sample.py")

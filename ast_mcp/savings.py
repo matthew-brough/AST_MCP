@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -91,14 +91,30 @@ def _open(path: Path) -> sqlite3.Connection:
     return conn
 
 
-@lru_cache(maxsize=8)
-def _cached(path_str: str) -> sqlite3.Connection:
-    return _open(Path(path_str))
+_connections: dict[str, sqlite3.Connection] = {}
+_connections_lock = threading.Lock()
 
 
 def connect(root: Path) -> sqlite3.Connection:
     """A ledger connection for ``root``, reused across calls in a process."""
-    return _cached(str(stats_path(root)))
+    key = str(stats_path(root))
+    with _connections_lock:
+        conn = _connections.get(key)
+        if conn is None:
+            conn = _connections[key] = _open(Path(key))
+        return conn
+
+
+def close_all() -> None:
+    """Close every open ledger connection.
+
+    Holding connections until the process exits leaves the file locked on
+    Windows, where an open handle blocks deleting the directory around it.
+    """
+    with _connections_lock:
+        for conn in _connections.values():
+            conn.close()
+        _connections.clear()
 
 
 def reset(root: Path) -> int:

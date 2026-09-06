@@ -69,6 +69,13 @@ def get_index(root: str | None = None) -> Index:
     return Index(Path(resolved))
 
 
+def close_index() -> None:
+    """Close the cached index and forget it, releasing the database file."""
+    if get_index.cache_info().currsize:
+        get_index().close()
+    get_index.cache_clear()
+
+
 F = TypeVar("F", bound=Callable[..., dict])
 
 
