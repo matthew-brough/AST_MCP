@@ -93,6 +93,16 @@ class TestFileOutline(ToolTestBase):
         self.assertEqual([e["code"] for e in result["errors"]], ["unreadable"])
 
 
+class TestBudget(ToolTestBase):
+    def test_assembled_response_fits_the_budget(self):
+        """SPEC §V.1 — `fit` spends before the hint and errors exist."""
+        from ast_mcp.render import estimate_tokens
+
+        result = tools.search_symbols(self.index, "render", limit=20, max_tokens=200)
+        self.assertLessEqual(estimate_tokens(result), 200)
+        self.assertTrue(result["truncated"])
+
+
 class TestGetSymbol(ToolTestBase):
     def test_returns_exact_source_for_a_definition(self):
         result = tools.get_symbol(self.index, "Widget.render")
@@ -137,6 +147,17 @@ class TestGetSymbol(ToolTestBase):
         result = tools.get_symbol(self.index, "sample:ping", line=9999)
         self.assertFalse(result["found"])
         self.assertEqual([e["code"] for e in result["errors"]], ["not_found"])
+
+    def test_overflow_names_are_charged_to_the_budget(self):
+        """SPEC §V.1 — the assembled payload fits, not just its rows."""
+        from ast_mcp.render import estimate_tokens
+
+        for budget in (4000, 900, 400):
+            with self.subTest(budget=budget):
+                result = tools.get_symbol(
+                    self.index, "sample:ping", mode="source", max_tokens=budget
+                )
+                self.assertLessEqual(estimate_tokens(result), budget)
 
     def test_path_disambiguates(self):
         result = tools.get_symbol(self.index, "render", path="src/core/sample.py")

@@ -74,6 +74,24 @@ def nest(items: list[dict], id_field: str, parent_field: str) -> list[dict]:
     return roots
 
 
+def enforce(payload: dict, keys: tuple[str, ...], max_tokens: int) -> dict:
+    """Final guard: the assembled response must fit, not just its items.
+
+    ``fit`` spends its budget before the list key, the errors and the narrowing
+    hint exist, so a payload can pass item-wise and still overshoot §V.1 by a
+    constant. Drop from the tail of the last populated list until the real
+    thing fits, and mark it trimmed.
+    """
+    for key in reversed(keys):
+        items = payload.get(key)
+        if not isinstance(items, list):
+            continue
+        while items and estimate_tokens(payload) > max_tokens:
+            items.pop()
+            payload["truncated"] = True
+    return payload
+
+
 def envelope(**fields: Any) -> dict:
     """Base response: errors and truncated are always present (SPEC §V.5, §V.1)."""
     payload: dict[str, Any] = {"errors": [], "truncated": False}

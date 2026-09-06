@@ -24,6 +24,7 @@ from ast_mcp.parser import ParsedFile
 from ast_mcp.render import (
     DEFAULT_MAX_TOKENS,
     clip,
+    enforce,
     envelope,
     estimate_tokens,
     fit,
@@ -78,7 +79,8 @@ def file_outline(
     payload[key] = nest(kept, id_field, "parent")
     payload["truncated"] = truncated
     with_errors(payload, errors)
-    return narrow_hint(payload, "max_depth, include_docstrings")
+    hinted = narrow_hint(payload, "max_depth, include_docstrings")
+    return enforce(hinted, (key,), max_tokens)
 
 
 # --- tool 2: get_symbol ------------------------------------------------------
@@ -135,7 +137,8 @@ def get_symbol(
         payload["candidates"] = kept
         payload["truncated"] = truncated
         with_errors(payload, errors)
-        return narrow_hint(payload, "path, or a fully qualified name")
+        hinted = narrow_hint(payload, "path, or a fully qualified name")
+        return enforce(hinted, ("candidates",), max_tokens)
 
     # Past this point every match is the same (qualified_name, kind): not an
     # ambiguity but N real definitions. Lua binds many listeners to one event
@@ -201,7 +204,8 @@ def get_symbol(
         payload["candidates"] = named
         payload["truncated"] = payload["truncated"] or dropped
     with_errors(payload, errors)
-    return narrow_hint(payload, 'line, or mode="signature"')
+    hinted = narrow_hint(payload, 'line, or mode="signature"')
+    return enforce(hinted, ("symbols", "candidates"), max_tokens)
 
 
 # --- tool 3: search_symbols --------------------------------------------------
@@ -241,7 +245,8 @@ def search_symbols(
     payload["hits"] = kept
     payload["truncated"] = truncated or len(rows) < total
     with_errors(payload, errors)
-    return narrow_hint(payload, "kind, lang, group, path_glob, limit")
+    hinted = narrow_hint(payload, "kind, lang, group, path_glob, limit")
+    return enforce(hinted, ("hits",), max_tokens)
 
 
 # --- tool 4: get_docstrings --------------------------------------------------
@@ -287,7 +292,8 @@ def get_docstrings(
     payload["docs"] = kept
     payload["truncated"] = truncated
     with_errors(payload, errors)
-    return narrow_hint(payload, "symbols, or a narrower path")
+    hinted = narrow_hint(payload, "symbols, or a narrower path")
+    return enforce(hinted, ("docs",), max_tokens)
 
 
 # --- tool 5: list_imports ----------------------------------------------------
@@ -333,7 +339,8 @@ def list_imports(
     payload["imports"] = kept
     payload["truncated"] = truncated
     with_errors(payload, errors)
-    return narrow_hint(payload, "a narrower path")
+    hinted = narrow_hint(payload, "a narrower path")
+    return enforce(hinted, ("imports",), max_tokens)
 
 
 # --- tool 6: ast_query -------------------------------------------------------
@@ -388,7 +395,8 @@ def ast_query(
     payload["matches"] = kept
     payload["truncated"] = truncated
     with_errors(payload, errors)
-    return narrow_hint(payload, "captures, or a more specific query")
+    hinted = narrow_hint(payload, "captures, or a more specific query")
+    return enforce(hinted, ("matches",), max_tokens)
 
 
 # --- shared ------------------------------------------------------------------
