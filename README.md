@@ -7,24 +7,66 @@ gets 40 lines rather than 2000.
 Read-only. The server never writes to your source — the only file it writes is
 its own index at `.ast_mcp/index.db`.
 
-## Install and run
+## Install
 
 ```bash
-uv sync
-uv run python -m ast_mcp.main --root /path/to/repo
+uv tool install ast-mcp
 ```
 
-Registered in `.mcp.json`:
+Or run it without installing anything:
+
+```bash
+uvx ast-mcp --version
+```
+
+Requires Python 3.11 or newer.
+
+## Wire it into Claude Code
+
+From the repository you want indexed:
+
+```bash
+ast-mcp init
+```
+
+That writes an `ast-mcp` stanza into `<repo>/.mcp.json`, adds `.ast_mcp/` to
+`.gitignore`, and builds the index. Claude Code reads `.mcp.json` at startup,
+so the next session in that directory has the tools already connected — no
+per-session step.
+
+`init` merges. Every other server in `.mcp.json` is left exactly as it was,
+and a file it cannot parse is reported rather than overwritten. Re-running it
+is a no-op. Pass `--dry-run` to see the change first.
+
+The stanza it writes carries no absolute paths, so it is safe to commit:
 
 ```json
-"ast-mcp": {
-  "command": "uv",
-  "args": ["run", "--directory", "/home/artem_op/projects/AST_MCP",
-           "python", "-m", "ast_mcp.main"]
+{
+  "mcpServers": {
+    "ast-mcp": { "command": "ast-mcp", "args": ["serve"] }
+  }
 }
 ```
 
-Root resolution: `--root`, else `AST_MCP_ROOT`, else the working directory.
+If `ast-mcp` is not permanently on `PATH` it records `uvx ast-mcp serve`
+instead. Override either with `--command "uv run ast-mcp serve"`.
+
+## CLI
+
+| command | what it does |
+|---|---|
+| `ast-mcp init` | register in `.mcp.json`, ignore the index dir, build the index |
+| `ast-mcp index [--rebuild]` | build or refresh the index; `--rebuild` discards it first |
+| `ast-mcp status [--json]` | file/symbol counts, index size, freshness, registration |
+| `ast-mcp languages [--group G]` | the language registry — 26 rows, their extensions and profiles |
+| `ast-mcp serve` | the MCP server over stdio; what Claude Code launches |
+
+Every command takes `--root PATH`. Root resolution is `--root`, else
+`AST_MCP_ROOT`, else the working directory. Bare `ast-mcp` means `ast-mcp
+serve`.
+
+Only `init` writes anything outside `.ast_mcp/`, and only `.mcp.json` and
+`.gitignore`. The server itself never writes to your source.
 
 ## Not every language gets the same treatment
 
@@ -108,8 +150,13 @@ and reparsed if it moved. There is no watcher daemon and no stale window.
 ## Development
 
 ```bash
-uv run python -m unittest discover -s tests -t .
+git clone https://github.com/matthew-brough/AST_MCP && cd AST_MCP
+uv sync --all-groups
+uv run --group dev pytest -q
 ```
+
+The suite runs on 3.11 through 3.14. `uv build` produces the wheel; the
+`.scm` query files ship inside it, and CI fails the build if any are missing.
 
 `SPEC.md` is the contract: §V invariants, §I interfaces, §T tasks, §B the log
 of what went wrong and what changed because of it.
