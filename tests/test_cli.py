@@ -319,7 +319,7 @@ class TestLanguages(unittest.TestCase):
             self.assertEqual(main(["languages"]), 0)
         body = out.getvalue()
         self.assertIn("python", body)
-        self.assertIn("26 languages", body)
+        self.assertIn("27 languages", body)
 
     def test_group_filter_and_json(self):
         out = io.StringIO()

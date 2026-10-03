@@ -45,7 +45,7 @@ MODULE_TYPES = frozenset({
 #: Specificity ranking. Two patterns can match the same byte range (Go's
 #: ``type_spec`` matches both ``type`` and ``struct``); the higher rank wins.
 KIND_RANK = {
-    "var": 0, "const": 1, "module": 2, "type": 2, "rule": 3, "index": 3,
+    "var": 0, "const": 1, "property": 1, "module": 2, "type": 2, "rule": 3, "index": 3,
     "function": 4, "class": 5, "interface": 5, "struct": 5, "enum": 5,
     "message": 5, "service": 5, "table": 5, "view": 5, "resource": 5,
     "stage": 5, "block": 5, "handler": 4, "method": 6, "rpc": 6,
@@ -377,6 +377,10 @@ def _build_import(caps: dict[str, list[Node]], src: bytes) -> Import | None:
     if node is not None:
         for descendant in _walk(node):
             if descendant.id == getattr(callee_node, "id", None):
+                continue
+            # Segments of the module path (C#'s `System.Collections`) are the
+            # path, not names it binds.
+            if module_node.start_byte <= descendant.start_byte < module_node.end_byte:
                 continue
             if descendant.type in {"identifier", "dotted_name", "type_identifier"}:
                 text = _text(descendant, src)

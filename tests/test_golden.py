@@ -48,6 +48,17 @@ GOLDEN = {
         ("handler", "sample:ping"),
         ("handler", "getWidget"),
     ],
+    "src/core/modern.cs": [
+        ("class", "PlayerInfo"),
+        ("class", "Vehicle"),
+        ("property", "Vehicle.Plate"),
+        ("struct", "Coord"),
+        ("class", "ServerMain"),
+        ("method", "ServerMain.Log"),
+        ("class", "StringExtensions"),
+        ("property", "StringExtensions.IsBlank"),
+        ("method", "StringExtensions.Shout"),
+    ],
     "src/data/schema.proto": [
         ("message", "User"),
         ("enum", "Role"),

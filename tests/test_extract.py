@@ -171,6 +171,80 @@ class TestLua(unittest.TestCase):
         self.assertIn(("require", "vrp"), modules)
 
 
+class TestCSharp(unittest.TestCase):
+    """FiveM ships two C# runtimes: mono (legacy) and .NET 10 (enhanced)."""
+
+    def test_legacy_mono_script(self):
+        _, ex = run("sample.cs")
+        symbols = by_qname(ex)
+        self.assertEqual(symbols["ClientMain"].kind, "class")
+        self.assertEqual(symbols["ClientMain.OnTick"].kind, "method")
+        self.assertEqual(symbols["ClientMain.ClientMain"].kind, "method")
+        self.assertEqual(symbols["ClientMain.Health"].kind, "property")
+        self.assertEqual(symbols["ClientMain.MaxPlayers"].kind, "const")
+        self.assertEqual(symbols["ClientMain.Callback"].kind, "type")
+        self.assertEqual(symbols["ClientMain.Point"].kind, "struct")
+        self.assertEqual(symbols["IGreeter.Greet"].kind, "method")
+        self.assertEqual(symbols["Weather"].kind, "enum")
+
+    def test_namespaces_do_not_prefix_names(self):
+        """Block and file-scoped namespaces give the same qualified names."""
+        _, legacy = run("sample.cs")
+        _, modern = run("modern.cs")
+        self.assertIsNone(by_qname(legacy)["ClientMain"].parent)
+        self.assertIsNone(by_qname(modern)["ServerMain"].parent)
+
+    def test_attributes_stay_in_the_signature(self):
+        _, ex = run("sample.cs")
+        symbols = by_qname(ex)
+        self.assertEqual(symbols["ClientMain.OnTick"].signature,
+                         "[Tick] public async Task OnTick()")
+        self.assertTrue(symbols["ClientMain.OnGreet"].signature.startswith(
+            '[EventHandler("sample:greet")]'))
+
+    def test_xml_doc_comment(self):
+        _, ex = run("sample.cs")
+        doc = by_qname(ex)["ClientMain.OnClientResourceStart"].docstring
+        self.assertEqual(doc, "/// <summary>Fires when a resource starts.</summary>")
+
+    def test_string_keyed_handlers_are_named_by_their_string(self):
+        _, ex = run("sample.cs")
+        handlers = [s for s in ex.symbols if s.kind == "handler"]
+        self.assertEqual([s.name for s in handlers],
+                         ["sample:heartbeat", "getHealth", "heal"])
+        self.assertEqual(handlers[2].end_line - handlers[2].start_line, 3)
+
+    def test_handler_rule_stays_off_method_bindings_and_callbacks(self):
+        _, ex = run("sample.cs")
+        names = {s.name for s in ex.symbols}
+        self.assertNotIn("onClientResourceStart", names)
+        self.assertNotIn("SELECT 1", names)
+
+    def test_modern_dotnet_syntax(self):
+        _, ex = run("modern.cs")
+        symbols = by_qname(ex)
+        self.assertEqual(symbols["PlayerInfo"].kind, "class")
+        self.assertEqual(symbols["Vehicle"].kind, "class")
+        self.assertEqual(symbols["Coord"].kind, "struct")
+        self.assertEqual(symbols["Vehicle.Plate"].kind, "property")
+        self.assertEqual(symbols["ServerMain"].signature,
+                         "public partial class ServerMain(ILogger logger) : BaseScript")
+        # C# 14 extension block members belong to the enclosing class.
+        self.assertEqual(symbols["StringExtensions.IsBlank"].kind, "property")
+        self.assertEqual(symbols["StringExtensions.Shout"].kind, "method")
+
+    def test_using_directives(self):
+        _, ex = run("sample.cs")
+        imports = {i.module: i for i in ex.imports}
+        self.assertIn("System", imports)
+        self.assertIn("CitizenFX.Core.Native.API", imports)
+        self.assertEqual(imports["System.Collections.Generic"].names, ())
+        self.assertEqual(imports["Newtonsoft.Json.JsonConvert"].alias, "Json")
+        _, modern = run("modern.cs")
+        self.assertEqual([i.module for i in modern.imports],
+                         ["System.Linq", "CitizenFX.Core"])
+
+
 class TestDocstringHelpers(unittest.TestCase):
     def test_blank_line_breaks_the_association(self):
         """SPEC §I.docstring — one blank line detaches the comment block."""

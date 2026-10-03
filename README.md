@@ -66,7 +66,7 @@ instead. Override either with `--command "uv run ast-mcp serve"`.
 | `ast-mcp index [--rebuild]` | build or refresh the index; `--rebuild` discards it first |
 | `ast-mcp status [--json]` | file/symbol counts, index size, freshness, registration |
 | `ast-mcp savings [--json] [--reset]` | tokens served vs. what reading those files whole would have cost |
-| `ast-mcp languages [--group G]` | the language registry — 26 rows, their extensions and profiles |
+| `ast-mcp languages [--group G]` | the language registry — 27 rows, their extensions and profiles |
 | `ast-mcp serve` | the MCP server over stdio; what Claude Code launches |
 
 Every command takes `--root PATH`. Root resolution is `--root`, else
@@ -85,12 +85,12 @@ two of them, so there are four **extraction profiles**:
 
 | profile | payload key | what you get | languages |
 |---|---|---|---|
-| `symbols` | `symbols` | signature, docstring, nesting, imports | python, javascript, typescript, tsx, go, lua |
+| `symbols` | `symbols` | signature, docstring, nesting, imports | python, javascript, typescript, tsx, go, lua, csharp |
 | `defs` | `symbols` | same shape, weaker guarantees — docstrings often `null` | ruby, perl, r, bash, zsh, css, scss, sql, graphql, proto, terraform, dockerfile |
 | `schema` | `schema` | key paths + inferred value types, **not** funcdefs | json, json5, yaml, toml, xml, csv |
 | `outline` | `outline` | heading / section tree | markdown, html |
 
-26 languages across six groups: `core`, `web`, `scripting`, `data`, `devops`,
+27 languages across six groups: `core`, `web`, `scripting`, `data`, `devops`,
 `docs`. Every response declares its `profile` and `group` **before** the
 payload — read that field, don't assume `symbols` exists.
 

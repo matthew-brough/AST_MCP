@@ -20,6 +20,7 @@ CORE_SAMPLES = {
     "tsx": b'import React from "react";\nexport const App = () => <div/>;\nexport interface P { a: number }\n',
     "go": b'package main\nimport ("fmt")\ntype S struct { A int }\nfunc F(a int) error { return nil }\nfunc (s *S) M() {}\n',
     "lua": b"local M = {}\nfunction M.f(a) end\nfunction M:g() end\nlocal function h() end\nreturn M\n",
+    "csharp": b"using System;\nnamespace N;\npublic record R(int A);\npublic class C { public void M() {} }\n",
 }
 
 
@@ -49,6 +50,7 @@ class TestRegistry(unittest.TestCase):
             ("app.ts", "typescript"),
             ("main.go", "go"),
             ("init.lua", "lua"),
+            ("Client/ClientMain.cs", "csharp"),
         ]
         for path, lang in cases:
             with self.subTest(path=path):
