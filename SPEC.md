@@ -63,7 +63,7 @@ response — agent never guesses fidelity (§V.12).
 
 | topic | choice |
 |---|---|
-| languages | 4 extraction profiles across 6 groups. see I.langs. 26 languages total |
+| languages | 4 extraction profiles across 6 groups. see I.langs. 27 languages total |
 | grammars | 6 core langs = dedicated packages. all others = `tree-sitter-language-pack` |
 | index | SQLite, mtime_ns + size invalidation |
 | tools | 6, core retrieval set |
@@ -321,7 +321,7 @@ return.
 ### I.langs — LANGS registry
 
 `ast_mcp/languages.py`. Single source of ext→language routing (§V.6).
-26 rows, one per language. Adding a language = one row + one `.scm` (or a
+27 rows, one per language. Adding a language = one row + one `.scm` (or a
 `NODE_KINDS` entry for schema/outline profiles).
 
 ```python
@@ -346,6 +346,7 @@ Full fidelity. Signature + docstring + parent nesting + import graph.
 | tsx | `.tsx` | `tree_sitter_typescript.language_tsx()` |
 | go | `.go` | `tree_sitter_go.language()` |
 | lua | `.lua` | `tree_sitter_lua.language()` |
+| csharp | `.cs` `.csx` | `pack:csharp` — FiveM mono (legacy) and .NET 10 (enhanced) alike; C# 7–14 syntax |
 
 #### group `scripting` — profile `defs`
 
@@ -472,7 +473,7 @@ Produced by `ast_mcp/extract.py`, stored by `ast_mcp/index.py`.
 class Symbol:
     name: str
     qualified_name: str     # dotted: module.Class.method
-    kind: str               # function|method|class|struct|interface|type|const|var|module
+    kind: str               # function|method|class|struct|interface|enum|type|const|var|property|module|handler
     lang: str
     path: str               # repo-relative, posix separators
     start_byte: int
@@ -553,6 +554,7 @@ def python_docstring(body: Node, src: bytes) -> str | None
 | javascript / typescript / tsx | `preceding_comment_block`: contiguous leading `comment` nodes ending on line before decl; JSDoc `/** */` preferred |
 | go | `preceding_comment_block`: contiguous `//` line-comment block directly above decl |
 | lua | `preceding_comment_block`: contiguous `---` block (LuaLS annotations) |
+| csharp | `preceding_comment_block`: contiguous `///` XML doc block |
 | ruby | `preceding_comment_block`: `#` block. YARD `@param` kept verbatim |
 | perl | `preceding_comment_block`: `#` block. POD (`=head1`…`=cut`) **not** parsed in v1 → `null` |
 | r | `preceding_comment_block`: `#'` roxygen block; falls back to plain `#` |
@@ -827,7 +829,7 @@ ast_mcp/
   cli.py             argv routing, init/index/status/savings/languages, serve
   claudemd.py        the §I.claudemd routing block, CCE marker handling
   main.py            entry, MCPServer wiring, run(transport="stdio")
-  languages.py       LangSpec registry (26 rows), load_language + fallback
+  languages.py       LangSpec registry (27 rows), load_language + fallback
   parser.py          bytes -> Tree, LRU cache keyed (path, mtime_ns, size)
   extract.py         dispatch on profile; Symbol/Import for symbols+defs
   extract_schema.py  SchemaNode for data group; NODE_KINDS map; §V.11 collapse
@@ -838,13 +840,13 @@ ast_mcp/
   render.py          output shaping, max_tokens trimming
   savings.py         per-call token ledger, baseline vs served, report
   queries/
-    core/     python.scm javascript.scm typescript.scm tsx.scm go.scm lua.scm
+    core/     python.scm javascript.scm typescript.scm tsx.scm go.scm lua.scm csharp.scm
     defs/     ruby.scm perl.scm r.scm bash.scm zsh.scm
               css.scm scss.scm sql.scm graphql.scm proto.scm
               terraform.scm dockerfile.scm
 tests/
   fixtures/
-    core/       sample.py sample.js sample.ts sample.tsx sample.go sample.lua
+    core/       sample.py sample.js sample.ts sample.tsx sample.go sample.lua sample.cs modern.cs
     scripting/  sample.rb sample.pl sample.R sample.sh sample.zsh
     web/        sample.html sample.css sample.scss
     data/       sample.json sample.yaml sample.toml sample.xml sample.csv

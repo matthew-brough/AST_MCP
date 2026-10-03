@@ -18,8 +18,8 @@ def run(relative: str):
 
 
 class TestRegistryBreadth(unittest.TestCase):
-    def test_twenty_six_rows_over_six_groups(self):
-        self.assertEqual(len(LANGS), 26)
+    def test_twenty_seven_rows_over_six_groups(self):
+        self.assertEqual(len(LANGS), 27)
         self.assertEqual(
             {s.group for s in LANGS},
             {"core", "web", "scripting", "data", "devops", "docs"},

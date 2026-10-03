@@ -57,6 +57,9 @@ _CORE = (
              "tree_sitter_go.language"),
     LangSpec("lua", (".lua",), "core", "symbols",
              "tree_sitter_lua.language"),
+    # One row covers FiveM's mono (legacy) and .NET 10 (enhanced) runtimes:
+    # both compile `.cs`, and the grammar parses C# 7 through 14 syntax.
+    LangSpec("csharp", (".cs", ".csx"), "core", "symbols", "pack:csharp"),
 )
 
 # --- group: scripting -- profile: defs --------------------------------------
